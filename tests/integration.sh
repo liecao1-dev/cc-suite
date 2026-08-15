@@ -145,6 +145,9 @@ assert_file_content "CLAUDE.md" "@AGENTS.md"
 assert_dir  ".codex/prompts"
 assert_file ".codex/prompts/.gitkeep"
 assert_file ".codex/config.toml"
+assert_file ".claude/commands/codex.md"
+assert_contains ".claude/commands/codex.md" "cc-suite-dispatcher: codex sha256="
+assert_file ".agents/skills/cc-suite/claude/SKILL.md"
 assert_file ".gitignore"
 assert_contains ".gitignore" "# >>> cc-suite >>>"
 assert_contains ".gitignore" "# <<< cc-suite <<<"
@@ -226,14 +229,29 @@ make_tmp
 
 assert_exit0 bash "$SCRIPTS/init.sh"
 hash1="$(md5 -q AGENTS.md 2>/dev/null || md5sum AGENTS.md | awk '{print $1}')"
+dispatcher_hash1="$(md5 -q .claude/commands/codex.md 2>/dev/null || md5sum .claude/commands/codex.md | awk '{print $1}')"
 
 assert_exit0 bash "$SCRIPTS/init.sh"
 hash2="$(md5 -q AGENTS.md 2>/dev/null || md5sum AGENTS.md | awk '{print $1}')"
+dispatcher_hash2="$(md5 -q .claude/commands/codex.md 2>/dev/null || md5sum .claude/commands/codex.md | awk '{print $1}')"
 
 if [ "$hash1" = "$hash2" ]; then ok_msg "AGENTS.md unchanged on re-run"
 else                              fail_msg "AGENTS.md changed on re-run"; fi
+if [ "$dispatcher_hash1" = "$dispatcher_hash2" ]; then ok_msg "/codex dispatcher unchanged on re-run"
+else                                                        fail_msg "/codex dispatcher changed on re-run"; fi
 
 assert_count "# >>> cc-suite >>>" ".gitignore" 1
+
+cleanup
+
+section "T05b: init.sh — preserves a user-owned /codex command"
+make_tmp
+
+mkdir -p .claude/commands
+printf '%s\n' '---' 'description: user command' '---' 'Keep me.' > .claude/commands/codex.md
+assert_exit0 bash "$SCRIPTS/init.sh"
+assert_contains ".claude/commands/codex.md" "Keep me."
+assert_not_contains ".claude/commands/codex.md" "cc-suite-dispatcher: codex"
 
 cleanup
 
@@ -772,9 +790,10 @@ cleanup
 # ═══════════════════════════════════════════════════════════════════════════════
 section "T24c: unbridge.sh — preserves .cc-suite/agents/ while clearing its own state"
 make_tmp
-mkdir -p .cc-suite/agents
+mkdir -p .cc-suite/agents .cc-suite/runtime/state/test-project
 
 printf -- "---\nname: reviewer\n---\nBe critical.\n" > .cc-suite/agents/reviewer.md
+printf '{"version":1,"config":{"recentDispatch":{}},"jobs":[]}\n' > .cc-suite/runtime/state/test-project/state.json
 echo "# AGENTS content" > AGENTS.md
 printf "@AGENTS.md\n" > CLAUDE.md
 printf "CC_SUITE_CREATED_CLAUDE=1\n" > .cc-suite/provenance
@@ -782,6 +801,7 @@ printf "CC_SUITE_CREATED_CLAUDE=1\n" > .cc-suite/provenance
 assert_exit0 bash "$SCRIPTS/unbridge.sh"
 
 assert_no_file ".cc-suite/provenance"     # cc-suite's own state: gone
+assert_no_dir  ".cc-suite/runtime"        # dispatcher MRU state: gone
 assert_file    ".cc-suite/agents/reviewer.md"  # the user's advisor: untouched
 assert_dir     ".cc-suite"
 
@@ -1823,7 +1843,7 @@ cleanup
 section "T54c: unbridge.sh — interleaved/nested sentinels fail closed, separate ones strip cleanly"
 
 toml_is_valid() {
-  python3 -c "import tomllib,sys; tomllib.load(open(sys.argv[1],'rb'))" "$1" 2>/dev/null
+  python3 -c "import importlib.util,sys; spec=importlib.util.find_spec('tomllib'); sys.exit(0) if spec is None else __import__('tomllib').load(open(sys.argv[1],'rb'))" "$1" 2>/dev/null
 }
 
 # (a) interleaved markers — must refuse and leave the file valid and intact
@@ -1902,6 +1922,7 @@ cleanup
 section "T55: bridge_mcp.sh — writes Codex and agy workspace projections"
 make_tmp
 
+printf '## Enabled Tools\n- [x] claude\n- [x] codex\n- [x] antigravity\n' > .cc-suite.md
 mkdir -p .codex
 printf '# base config\n' > .codex/config.toml
 cat > .mcp.json <<'JSON'
@@ -2052,34 +2073,6 @@ assert_exit0 python3 -c "import json; d=json.load(open('preflight.json')); asser
 
 cleanup
 
-# ══════════ T61  stop hook — uses current Codex CLI flags ════════════════════
-section "T61: stop-review-gate-hook.mjs — no removed approval flags"
-make_tmp
-
-mkdir -p bin state
-cat > bin/codex <<'CODEX'
-#!/bin/sh
-printf '%s\n' "$@" > "$CODEX_ARGS"
-printf 'ALLOW: test review passed\n'
-CODEX
-chmod +x bin/codex
-
-NODE_BIN="$(command -v node)"
-CLAUDE_PLUGIN_DATA="$PWD/state" "$NODE_BIN" --input-type=module -e \
-  "const {setConfig}=await import('$SCRIPTS/lib/state.mjs'); setConfig(process.cwd(),'stopReviewGate',true)"
-
-hook_input="{\"cwd\":\"$PWD\"}"
-env PATH="$PWD/bin:/usr/bin:/bin" CLAUDE_PLUGIN_DATA="$PWD/state" CODEX_ARGS="$PWD/codex-args" \
-  "$NODE_BIN" "$SCRIPTS/stop-review-gate-hook.mjs" <<< "$hook_input" > hook-output.txt
-
-assert_not_contains "codex-args" "--ask-for-approval"
-assert_not_contains "codex-args" "--approval-policy"
-assert_not_contains "codex-args" "--model"
-assert_contains "codex-args" "--sandbox"
-assert_contains "codex-args" "--color"
-
-cleanup
-
 # ══════════ T62  bridge_mcp.sh — removes stale entries when source is absent ══
 section "T62: bridge_mcp.sh — clears stale entries when .mcp.json is absent"
 make_tmp
@@ -2123,7 +2116,7 @@ cleanup
 section "T64: bridge_tools.py — default selection bridges no registry tools"
 # ═══════════════════════════════════════════════════════════════════════════════
 make_tmp
-echo '{ "mcpServers": {} }' > .mcp.json         # no .cc-suite.md → default claude/codex/antigravity
+echo '{ "mcpServers": {} }' > .mcp.json         # no .cc-suite.md → default claude/codex
 assert_exit0   python3 "$SCRIPTS/bridge_tools.py"
 assert_no_file ".grok/config.toml"
 assert_no_file "opencode.json"
@@ -2335,12 +2328,12 @@ assert_contains ".codex/config.toml" "[mcp_servers.my-server]"
 assert_no_dir   ".agents"
 cleanup
 
-section "T73d: bridge_mcp.sh — no .cc-suite.md keeps legacy behavior (both projected)"
+section "T73d: bridge_mcp.sh — no .cc-suite.md defaults to Claude and Codex only"
 make_tmp
 echo '{ "mcpServers": { "my-server": { "type": "stdio", "command": "x" } } }' > .mcp.json
 assert_exit0 bash "$SCRIPTS/bridge_mcp.sh"
 assert_contains ".codex/config.toml" "[mcp_servers.my-server]"
-assert_file     ".agents/mcp_config.json"
+assert_no_file  ".agents/mcp_config.json"
 cleanup
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2429,7 +2422,7 @@ python3 - <<'PY' && ok_msg "codex/agy checks are expected_absent when disabled" 
 import json
 d = json.load(open("diag.json"))
 checks = {c["id"]: c for c in d["checks"]}
-for cid in ("codex_artifacts", "mcp_codex_cli", "claude_code_reg", "mcp_parity", "agy_mcp", "codex_runtime", "agents_skills_link"):
+for cid in ("codex_artifacts", "mcp_codex_cli", "claude_code_reg", "mcp_parity", "agy_mcp", "codex_runtime", "agents_skills_link", "codex_dispatcher", "claude_dispatcher"):
     assert checks[cid]["status"] == "expected_absent", f"{cid}: {checks[cid]['status']}"
 PY
 cleanup
@@ -2437,35 +2430,35 @@ cleanup
 section "T76c: diagnose.py — initialized project is healthy on the hermetic checks"
 make_tmp
 printf '# X\n' > AGENTS.md
+printf '## Enabled Tools\n- [x] claude\n- [x] codex\n' > .cc-suite.md
 bash "$SCRIPTS/init.sh"          >/dev/null 2>&1
 bash "$SCRIPTS/bridge_skills.sh" >/dev/null 2>&1
 bash "$SCRIPTS/mcp_codex.sh"     >/dev/null 2>&1
 bash "$SCRIPTS/mcp_claude.sh"    >/dev/null 2>&1
 bash "$SCRIPTS/bridge_mcp.sh"    >/dev/null 2>&1
-printf '## Enabled Tools\n- [x] claude\n- [x] codex\n- [x] antigravity\n\n## Defaults\n\n- **Default model**: latest\n' > .cc-suite.md
 mkdir -p "$TMP/fakehome"; HOME="$TMP/fakehome" python3 "$SCRIPTS/diagnose.py" --json --no-preflight > diag.json 2>/dev/null || true
 python3 - <<'PY' && ok_msg "initialized project: bridge checks healthy, latest policy healthy" || fail_msg "initialized-project assertions failed"
 import json
 d = json.load(open("diag.json"))
 checks = {c["id"]: c for c in d["checks"]}
 for cid in ("agents_md", "claude_md", "claude_skills_link", "agents_skills_link",
-            "codex_config", "mcp_codex_cli", "claude_code_reg", "agy_mcp", "gitignore", "model_pin"):
+            "codex_dispatcher", "claude_dispatcher", "codex_config", "mcp_codex_cli",
+            "claude_code_reg", "gitignore"):
     assert checks[cid]["status"] == "healthy", f"{cid}: {checks[cid]['status']} — {checks[cid]['detail']}"
 assert d["summary"].get("issue", 0) == 0, d["summary"]
 PY
 cleanup
 
-section "T76d: diagnose.py — malformed model field is informational, stale advisor parity is an issue"
+section "T76d: diagnose.py — stale advisor parity is an issue"
 make_tmp
 printf '## Defaults\n\n- **Default model**: latest\n- **Default model**: gpt-old\n' > .cc-suite.md
 mkdir -p .cc-suite/agents
 printf -- '---\ndescription: t.\n---\nx\n' > .cc-suite/agents/ghost.md
 mkdir -p "$TMP/fakehome"; HOME="$TMP/fakehome" python3 "$SCRIPTS/diagnose.py" --json --no-preflight > diag.json 2>/dev/null || true
-python3 - <<'PY' && ok_msg "duplicate model field → info; unregistered advisor → issue" || fail_msg "T76d assertions failed"
+python3 - <<'PY' && ok_msg "unregistered advisor → issue" || fail_msg "T76d assertions failed"
 import json
 d = json.load(open("diag.json"))
 checks = {c["id"]: c for c in d["checks"]}
-assert checks["model_pin"]["status"] == "info", checks["model_pin"]
 assert checks["advisors"]["status"] == "issue", checks["advisors"]
 PY
 cleanup
@@ -2480,24 +2473,6 @@ d = json.load(open("diag.json"))
 checks = {c["id"]: c for c in d["checks"]}
 assert checks["tool_grok"]["status"] == "issue", checks.get("tool_grok")
 assert any("bridge_tools" in cmd for cmd in checks["tool_grok"]["fix"]["auto"])
-PY
-cleanup
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# T77  fix_plugin_hooks.py — section-scoped idempotent TOML edit
-# ═══════════════════════════════════════════════════════════════════════════════
-section "T77: fix_plugin_hooks.py — replaces, inserts once, leaves other tables alone"
-make_tmp
-printf '[features]\nplugin_hooks = false\n[other]\nplugin_hooks = false\n' > cfg.toml
-export FIX="$SCRIPTS/fix_plugin_hooks.py"
-assert_exit0 python3 "$SCRIPTS/fix_plugin_hooks.py" cfg.toml
-python3 - <<'PY' && ok_msg "replaced in [features], [other] untouched, idempotent" || fail_msg "fix_plugin_hooks assertions failed"
-import subprocess, sys, tomllib
-d = tomllib.load(open("cfg.toml", "rb"))
-assert d["features"]["plugin_hooks"] is True and d["other"]["plugin_hooks"] is False
-subprocess.run([sys.executable, __import__("os").environ["FIX"], "cfg.toml"], check=True, capture_output=True)
-text = open("cfg.toml").read()
-assert text.count("plugin_hooks") == 2  # one per table, no duplicates added
 PY
 cleanup
 

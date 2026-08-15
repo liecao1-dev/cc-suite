@@ -112,9 +112,7 @@ function withStateLock(cwd, fn) {
 function defaultState() {
   return {
     version: STATE_VERSION,
-    config: {
-      stopReviewGate: false,
-    },
+    config: {},
     jobs: [],
   };
 }

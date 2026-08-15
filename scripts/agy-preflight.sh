@@ -199,7 +199,7 @@ CLAUDE_MCP_REGISTERED=false
 # commented-out block, and unrelated servers that merely mention claude-octopus.
 # Verify the actual mcpServers["claude-code"] entry instead.
 #
-# Two strictnesses, as commands/shared/agy-call.md documents. `pinned` is for the
+# Two strictnesses for the legacy internal agy lane. `pinned` is for the
 # cc-suite-generated workspace profile, which always writes an exact version.
 # `any` answers "is the reverse bridge available at all" for a user-managed
 # profile, where `claude-octopus@latest` or a globally installed `claude-octopus`

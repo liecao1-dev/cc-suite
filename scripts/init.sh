@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cc-suite: initialize the Claude / Codex / Antigravity (`agy`) bridge in the current repo.
+# cc-suite: initialize the simple Claude / Codex bridge in the current repo.
 # Idempotent. Safe to re-run.
 
 set -euo pipefail
@@ -32,7 +32,7 @@ skip() { printf '· %s\n' "$*"; }
 
 # Which coding agents this project bridges. Single-sourced from the
 # `## Enabled Tools` section of .cc-suite.md via the bridge engine, which
-# itself falls back to claude/codex/antigravity when the file or section is
+# itself falls back to claude/codex when the file or section is
 # absent — so a project initialized before tool selection existed behaves
 # exactly as before. A helper FAILURE is different from an absent selection:
 # defaulting silently could create artifacts the project did not select.
@@ -41,7 +41,7 @@ if ! ENABLED_TOOLS="$(python3 "${SCRIPT_DIR}/bridge_tools.py" --enabled 2>/dev/n
   echo "       Fix the '## Enabled Tools' section of .cc-suite.md (or remove it), then re-run /cc-suite:init." >&2
   exit 1
 fi
-[ -n "$ENABLED_TOOLS" ] || ENABLED_TOOLS=$'claude\ncodex\nantigravity'
+[ -n "$ENABLED_TOOLS" ] || ENABLED_TOOLS=$'claude\ncodex'
 
 tool_enabled() { printf '%s\n' "$ENABLED_TOOLS" | grep -qx "$1"; }
 
@@ -113,8 +113,8 @@ TPL
 **Always write new instructions, rules, and memory to `AGENTS.md` only.**
 
 Never modify `CLAUDE.md` directly — it only imports `AGENTS.md`.
-This keeps Claude Code, Codex CLI, and Antigravity CLI (`agy`) on the same
-context; Codex and `agy` both read `AGENTS.md` natively.
+This keeps Claude Code and Codex CLI on the same context; Codex reads
+`AGENTS.md` natively.
 
 ## Project Structure
 
@@ -122,7 +122,7 @@ context; Codex and `agy` both read `AGENTS.md` natively.
 - `.agents/skills/` — symlink to `.claude/skills/` (Codex skill scan path)
 - `.codex/prompts/` — Codex slash-command prompts
 - `.codex/hooks.json` / `.codex/config.toml` — Codex hooks/config (optional)
-- `.mcp.json` — MCP server registrations (Claude Code + Codex)
+- `.mcp.json` — project MCP server registrations
 TPL
   } > AGENTS.md
   CC_SUITE_CREATED_AGENTS=1
@@ -201,7 +201,7 @@ elif [ ! -f .codex/config.toml ]; then
 # Uncomment to also read CLAUDE.md as a fallback instruction source:
 # project_doc_fallback_filenames = ["CLAUDE.md"]
 
-# MCP servers mirrored from .mcp.json are added below by /cc-suite:bridge-mcp.
+# MCP servers mirrored from .mcp.json are maintained by cc-suite repair/update.
 CFG
   ok ".codex/config.toml created"
   record_provenance "CC_SUITE_CREATED_CODEX_CONFIG=1"
@@ -212,10 +212,20 @@ fi
 # --- 6. Skills bridge -------------------------------------------------------
 bash "${SCRIPT_DIR}/bridge_skills.sh"
 
-# --- 7. .gitignore ----------------------------------------------------------
+# --- 7. Literal dispatcher commands ----------------------------------------
+# Plugin commands are namespaced by Claude Code. Install a safely-owned
+# project shim so the daily surface is the promised literal `/codex` when
+# Codex is enabled.
+if tool_enabled codex; then
+  bash "${SCRIPT_DIR}/install_dispatchers.sh"
+else
+  skip ".claude/commands/codex.md skipped — codex not enabled for this project"
+fi
+
+# --- 8. .gitignore ----------------------------------------------------------
 # Delegates to scripts/ensure_gitignore.sh — same helper bridge_skills.sh
-# calls, so the block stays in sync whether the user re-runs /cc-suite:init
-# or just /cc-suite:bridge-skills. PRIVATE carries the --private flag.
+# calls, so the block stays in sync when the user re-runs init or repair.
+# PRIVATE carries the --private flag.
 PRIVATE="$PRIVATE" bash "$SCRIPT_DIR/ensure_gitignore.sh"
 
 echo

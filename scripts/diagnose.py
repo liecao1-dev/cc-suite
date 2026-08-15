@@ -2,9 +2,8 @@
 """cc-suite structured diagnostic engine.
 
 The single source of truth for "is this project's cc-suite setup healthy?".
-The `/cc-suite:diagnose` command and the Codex-facing diagnose skill are thin
-wrappers around this engine: they run it, render its buckets, apply the fix
-commands it emits, then run it again and diff the two results.
+The `/cc-suite:diagnose` command is a thin wrapper around this engine: it runs
+the checks, renders buckets, applies prescribed fixes, then verifies again.
 
 Every check is classified with awareness of the project's Enabled Tools
 selection (.cc-suite.md `## Enabled Tools`), so an artifact that is absent
@@ -13,7 +12,7 @@ because its tool was deselected is `expected_absent`, not an issue.
 Usage:
     python3 diagnose.py            # human-readable buckets
     python3 diagnose.py --json     # machine-readable report
-    python3 diagnose.py --no-preflight   # skip the model-pin check's preflight
+    python3 diagnose.py --no-preflight   # retained compatibility flag
     python3 diagnose.py --boot-test      # include the network-dependent
                                          # claude-octopus boot/handshake check
 
@@ -35,6 +34,7 @@ real contract; the exit code is a convenience for shell callers).
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -158,7 +158,7 @@ def check_legacy_google() -> list[dict]:
     if (ROOT / "GEMINI.md").is_file() or (ROOT / ".gemini").is_dir():
         out.append(check("legacy_google", "GEMINI.md / .gemini/", "manual",
                          "legacy Google artifacts present — may be deliberate (enterprise Gemini) or leftover",
-                         manual="run /cc-suite:migrate-google to migrate or consciously retain them"))
+                         manual="review and migrate or consciously retain the legacy Google files"))
     return out
 
 
@@ -213,6 +213,61 @@ def check_skills_links(enabled: list[str]) -> list[dict]:
     return out
 
 
+def check_dispatchers(enabled: list[str]) -> list[dict]:
+    out: list[dict] = []
+    if "codex" not in enabled:
+        out.append(check("codex_dispatcher", "/codex dispatcher", "expected_absent",
+                         "Codex is not enabled"))
+        out.append(check("claude_dispatcher", "$claude skill", "expected_absent",
+                         "Codex is not enabled"))
+        return out
+    target = ROOT / ".claude/commands/codex.md"
+    text = _read(target)
+    marker = re.compile(
+        r"^<!-- cc-suite-dispatcher: codex sha256=([0-9a-f]{64}) -->$", re.M
+    )
+    if text is None:
+        out.append(check("codex_dispatcher", "/codex dispatcher", "issue",
+                         "missing .claude/commands/codex.md",
+                         auto=[f"bash {script('install_dispatchers.sh')}"]))
+    else:
+        match = marker.search(text)
+        if not match:
+            out.append(check("codex_dispatcher", "/codex dispatcher", "info",
+                             "same-name user command preserved; use /cc-suite:codex"))
+        else:
+            start, end = match.span()
+            if end < len(text) and text[end] == "\n":
+                end += 1
+            body = text[:start] + text[end:]
+            actual = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            if actual == match.group(1):
+                out.append(check("codex_dispatcher", "/codex dispatcher", "healthy",
+                                 "generated command is intact"))
+            else:
+                out.append(check("codex_dispatcher", "/codex dispatcher", "info",
+                                 "generated command was edited; preserved as user-owned"))
+
+    skill = ROOT / ".agents/skills/cc-suite/claude/SKILL.md"
+    policy = ROOT / ".agents/skills/cc-suite/claude/agents/openai.yaml"
+    skill_text = _read(skill)
+    policy_text = _read(policy)
+    if skill_text is None:
+        out.append(check("claude_dispatcher", "$claude skill", "issue",
+                         "not visible through .agents/skills",
+                         auto=[f"bash {script('bridge_skills.sh')}"]))
+    elif not policy_text or not re.search(
+        r"allow_implicit_invocation:\s*false", policy_text
+    ):
+        out.append(check("claude_dispatcher", "$claude skill", "issue",
+                         "explicit-invocation guard is missing",
+                         auto=[f"bash {script('bridge_skills.sh')}"]))
+    else:
+        out.append(check("claude_dispatcher", "$claude skill", "healthy",
+                         "visible and explicit-only"))
+    return out
+
+
 def check_stale_nested_symlinks() -> list[dict]:
     out = []
     legit = {ROOT / ".claude/skills/cc-suite", ROOT / ".agents/skills",
@@ -259,7 +314,7 @@ def check_cache_freshness() -> dict:
     return check("cache_freshness", "plugin cache", "issue",
                  f"skills symlink at v{m.group(1)}, installed plugin is v{installed}",
                  manual="run `claude plugin update cc-suite@xiaolai`, then restart Claude Code and run "
-                        "/cc-suite:bridge-skills in the new session (re-bridging from this session would "
+                        "/cc-suite:repair in the new session (repairing from this session would "
                         "repoint to the old cache)",
                  restart_required=True)
 
@@ -963,34 +1018,6 @@ def check_registry_tools(enabled: list[str]) -> list[dict]:
     return out
 
 
-def plugin_hooks_enabled(config_text: str) -> bool:
-    """True when `[features] plugin_hooks = true` is in effect in a Codex config.
-
-    Parsed with tomllib so valid spellings the fixer accepts (leading whitespace,
-    trailing comments, key order) are not misdiagnosed; the line scan is only the
-    pre-3.11 fallback. Shared with status.sh so the two readouts cannot disagree.
-    """
-    try:
-        import tomllib
-        parsed = tomllib.loads(config_text)
-    except ModuleNotFoundError:
-        # No tomllib (pre-3.11): tolerate the header/assignment spellings TOML
-        # allows — internal whitespace and trailing comments — instead of the
-        # exact-match scan that misdiagnosed valid configs the fixer accepts.
-        in_features = False
-        for line in config_text.splitlines():
-            s = line.strip()
-            if s.startswith("["):
-                in_features = bool(re.match(r"^\[\s*features\s*\]\s*(?:#.*)?$", s))
-            elif in_features and re.match(r"^plugin_hooks\s*=\s*true\s*(?:#.*)?$", s):
-                return True
-        return False
-    except Exception:  # noqa: BLE001 — invalid TOML means the flag is not in effect
-        return False
-    features = parsed.get("features")
-    return isinstance(features, dict) and features.get("plugin_hooks") is True
-
-
 def check_codex_runtime(enabled: list[str]) -> list[dict]:
     if "codex" not in enabled:
         return [check("codex_runtime", "Codex runtime", "expected_absent", "Codex is not enabled")]
@@ -1027,12 +1054,6 @@ def check_codex_runtime(enabled: list[str]) -> list[dict]:
                          "not trusted — hooks, rules, and .codex/config.toml are inert",
                          manual="run `codex` once in this directory and accept the trust prompt"))
 
-    if plugin_hooks_enabled(text):
-        out.append(check("plugin_hooks", "plugin_hooks", "healthy", "enabled in ~/.codex/config.toml"))
-    else:
-        out.append(check("plugin_hooks", "plugin_hooks", "issue",
-                         "not set — plugin-bundled Codex hooks are inert",
-                         auto=[f"python3 {script('fix_plugin_hooks.py')}"]))
     return out
 
 
@@ -1134,6 +1155,7 @@ def run(run_preflight: bool = True, boot_test: bool = False) -> dict:
     checks.append(check_claude_md())
     checks.extend(check_legacy_google())
     checks.extend(check_skills_links(enabled))
+    checks.extend(check_dispatchers(enabled))
     checks.extend(check_stale_nested_symlinks())
     checks.append(check_cache_freshness())
     checks.extend(check_codex_artifacts(enabled))
@@ -1146,7 +1168,6 @@ def run(run_preflight: bool = True, boot_test: bool = False) -> dict:
     checks.append(check_gitignore())
     checks.extend(check_registry_tools(enabled))
     checks.extend(check_codex_runtime(enabled))
-    checks.append(check_model_pin(run_preflight))
     if boot_test:
         checks.append(check_boot(enabled))
 

@@ -290,6 +290,15 @@ for _p in "$ORIGINAL_CLAUDE" "$LEGACY_ORIGINAL_CLAUDE"; do
     fi
   fi
 done
+# Per-project dispatcher MRU state is always cc-suite-owned. Refuse to follow a
+# same-name symlink, but otherwise remove this exact managed subtree.
+if [ -L .cc-suite/runtime ]; then
+  skip ".cc-suite/runtime is a symlink — left alone"
+elif [ -d .cc-suite/runtime ]; then
+  rm -rf .cc-suite/runtime
+  ok "removed .cc-suite/runtime/ dispatcher state"
+fi
+
 # Drop .cc-suite/ only when nothing else lives there — declared advisor agents
 # under .cc-suite/agents/ are the user's, and outlive the bridge.
 if [ -d .cc-suite ]; then
@@ -355,6 +364,8 @@ fi
 # .agents/skills symlink only — never the .claude/skills/ target, and never a
 # link the user pointed elsewhere (bridge_skills.sh refuses to overwrite those,
 # so unbridge must not delete them either).
+bash "${SCRIPT_DIR}/uninstall_dispatchers.sh"
+
 if [ -L .agents/skills ]; then
   _skills_target="$(readlink .agents/skills)"
   if [ "$_skills_target" = "../.claude/skills" ]; then
@@ -415,7 +426,7 @@ INIT_TEMPLATE = """\
 # Uncomment to also read CLAUDE.md as a fallback instruction source:
 # project_doc_fallback_filenames = ["CLAUDE.md"]
 
-# MCP servers mirrored from .mcp.json are added below by /cc-suite:bridge-mcp.
+# MCP servers mirrored from .mcp.json are maintained by cc-suite repair/update.
 """
 p = Path(".codex/config.toml")
 text = p.read_text(encoding="utf-8")

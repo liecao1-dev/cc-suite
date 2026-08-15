@@ -57,7 +57,7 @@ PROV_SCHEMA = 1
 TOML_SENTINEL_OPEN = "# >>> cc-suite-mcp >>>"
 TOML_SENTINEL_CLOSE = "# <<< cc-suite-mcp <<<"
 
-DEFAULT_TOOLS = ["claude", "codex", "antigravity"]
+DEFAULT_TOOLS = ["claude", "codex"]
 
 # Reserved name of the reverse-delegation server cc-suite adds to every mirrored
 # config. A source server may not take it (see desired_servers).

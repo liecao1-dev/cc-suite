@@ -12,29 +12,14 @@ const SKILLS_DIR = path.join(PLUGIN_ROOT, "skills", "cc-suite");
 // Skills that either hand work back to Claude Code or mutate project state.
 // bridge_skills.sh exposes every skill here to Codex through
 // .agents/skills -> ../.claude/skills, so a Codex session that Claude itself
-// spawned can see them. Left implicitly invocable, `$audit` matches an
-// "audit this code" prompt and routes the audit back to Claude — collapsing the
-// independent review into self-review. These must be explicit-only.
+// spawned can see them. Left implicitly invocable, `$claude` can route work
+// straight back to its author and collapse independent judgment. These must be
+// explicit-only.
 const EXPLICIT_ONLY = [
-  "audit",
-  "audit-fix",
-  "verify",
-  "claude-review",
-  "claude-plan",
-  "claude-implement",
-  "claude-debug",
-  "init",
-  "repair",
-  "diagnose",
+  "claude",
 ];
 
-// Passive reference skills. They inject knowledge and delegate nothing, so
-// implicit invocation is the point — they must NOT carry the guard.
-const IMPLICIT_ALLOWED = [
-  "claude-code-conventions",
-  "vocabulary",
-  "agent-design",
-];
+const IMPLICIT_ALLOWED = [];
 
 function readPolicy(skill) {
   const policyPath = path.join(SKILLS_DIR, skill, "agents", "openai.yaml");
@@ -88,25 +73,24 @@ test("passive reference skills stay implicitly invocable", () => {
   }
 });
 
-test("the Codex call preamble forbids delegating the task back to Claude", () => {
-  const partial = fs.readFileSync(
-    path.join(PLUGIN_ROOT, "commands", "shared", "codex-call.md"),
+test("the /codex prompt forbids delegating the task back to Claude", () => {
+  const command = fs.readFileSync(
+    path.join(PLUGIN_ROOT, "commands", "codex.md"),
     "utf8"
   );
   assert.match(
-    partial,
-    /Delegation boundary/,
-    "codex-call.md must document a delegation-boundary preamble part"
+    command,
+    /This request already reached you by delegation from Claude Code/,
+    "commands/codex.md must carry the delegation boundary"
   );
   assert.match(
-    partial,
-    /do not invoke workspace skills/i,
-    "The preamble must tell Codex not to invoke workspace skills"
+    command,
+    /Do not invoke the \$claude workspace skill/i,
+    "The preamble must tell Codex not to invoke $claude"
   );
-  // The guard is worthless if it is described as optional.
   assert.match(
-    partial,
-    /Parts 1[-–]3 are always present/,
-    "The delegation boundary must be an always-present preamble part"
+    command,
+    /固定边界/,
+    "The delegation boundary must be a fixed prompt part"
   );
 });

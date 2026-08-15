@@ -3,7 +3,7 @@
 #
 # Unlike codex-preflight.sh / agy-preflight.sh, this performs NO network
 # round-trip. Its job is to fail fast on the two things that would otherwise
-# make /cc-suite:grok hang until the job deadline: grok not installed, or grok
+# make a legacy headless Grok call hang until the job deadline: not installed, or
 # not logged in. Both are detectable locally (binary on PATH; XAI_API_KEY env or
 # a non-empty ~/.grok/auth.json), so a preflight here is a cheap pre-check rather
 # than a full connectivity probe — which also respects the "no availability

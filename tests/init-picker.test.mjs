@@ -12,80 +12,35 @@ const INIT = fs.readFileSync(
   "utf8"
 );
 
-// The picker itself is prose the agent follows, so these lock in the parts that
-// would silently change behaviour if edited away.
+// Initialization is intentionally boring: it always wires the two supported
+// directions. Model/profile choice belongs to each dispatch, not setup.
 
-test("init drives the picker off real PATH detection, not a hardcoded list", () => {
-  assert.match(
-    INIT,
-    /bridge_tools\.py"? --detect/,
-    "init must probe what is installed rather than assume"
-  );
-  assert.match(
-    INIT,
-    /bridge_tools\.py"? --set-enabled/,
-    "init must record the selection through the script, not by hand-editing"
-  );
+test("init exposes exactly the Claude-to-Codex and Codex-to-Claude directions", () => {
+  assert.match(INIT, /Claude 里用 `\/codex <任务>`/);
+  assert.match(INIT, /Codex 里用 `\$claude <任务>`/);
+  assert.doesNotMatch(INIT, /multiSelect:\s*true/);
+  assert.doesNotMatch(INIT, /bridge_tools\.py"? --set-enabled/);
 });
 
-test("the bridge question is multi-select and pre-selects installed tools", () => {
-  const step = INIT.slice(INIT.indexOf("Step 5b"), INIT.indexOf("Step 6"));
-  assert.ok(step.length > 200, "Step 5b should exist and be substantive");
-  assert.match(step, /multiSelect:\s*true/, "bridges are not mutually exclusive");
-  assert.match(
-    step,
-    /[Pp]re-select every tool whose `installed` is true/,
-    "the common case should be a single Enter"
-  );
-  assert.match(
-    step,
-    /china_note/,
-    "China tier must be visible when choosing, not discovered later"
-  );
-});
-
-test("Claude cannot be unticked", () => {
-  const step = INIT.slice(INIT.indexOf("Step 5b"), INIT.indexOf("Step 6"));
-  assert.match(
-    step,
-    /Claude is always bridged/i,
-    "Claude is the source of truth the other bridges mirror from"
-  );
-});
-
-test("every Codex-only step tells the agent to skip it when Codex is off", () => {
-  // Each of these scripts writes into .codex/ or registers a Codex MCP server.
-  // Running one in a project that did not select Codex is what the tool picker
-  // exists to prevent, so each must carry an explicit skip instruction.
-  const codexOnly = ["mcp_codex.sh", "mcp_claude.sh", "bridge_hooks.py"];
-  const steps = INIT.split(/^### /m);
-
-  for (const script of codexOnly) {
-    const step = steps.find((s) => s.includes(script));
-    assert.ok(step, `no init step runs ${script}`);
-    assert.match(
-      step,
-      /\*\*Skip[^*]*\*\*/,
-      `the step running ${script} must carry a bold skip instruction`
-    );
-    assert.match(
-      step,
-      /Codex/,
-      `the skip condition for ${script} must name Codex`
-    );
+test("init installs both dispatch channels without a model picker", () => {
+  for (const script of ["init.sh", "mcp_codex.sh", "mcp_claude.sh"]) {
+    assert.match(INIT, new RegExp(`scripts/${script.replace(".", "\\.")}`));
   }
+  assert.match(INIT, /模型配置不在初始化时锁定/);
+  assert.match(INIT, /每次派遣都会重新显示选择器/);
 });
 
-test("the summary reports what was skipped instead of hiding it", () => {
-  const summary = INIT.slice(INIT.indexOf("Step 12"));
-  assert.match(
-    summary,
-    /Not bridged/,
-    "a user should see which agents were left out and how to add them"
-  );
-  assert.match(
-    summary,
-    /bridge-tools/,
-    "the summary should point at the command that changes the selection"
-  );
+test("init requires real local dependencies and fails instead of falling back", () => {
+  assert.match(INIT, /command -v codex/);
+  assert.match(INIT, /若 `codex` 缺失/);
+  assert.match(INIT, /停止/);
+  assert.doesNotMatch(INIT, /自动回退/);
+});
+
+test("init summary teaches only the two plain-language entry points", () => {
+  const summary = INIT.slice(INIT.indexOf("## 6."));
+  assert.match(summary, /Claude：\/codex <用大白话写任务>/);
+  assert.match(summary, /Codex：\$claude <用大白话写任务>/);
+  assert.match(summary, /最近配置只排第一，不会自动使用/);
+  assert.doesNotMatch(summary, /Not bridged|bridge-tools/);
 });

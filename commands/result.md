@@ -1,19 +1,9 @@
 ---
-description: Fetch stored output from a completed Codex job
+description: 读取一个已经结束的 Codex 派遣 job 的保存结果
 argument-hint: "[job-id]"
 ---
 
-## User Input
-
-```text
-$ARGUMENTS
-```
-
-## Workflow
-
-### Step 1: Resolve the job and read its stored result
-
-Resolve the reference (empty → most recent finished job for this session; otherwise exact or prefix match) and load the stored result in one call:
+# cc-suite result
 
 ```bash
 node -e "
@@ -30,38 +20,8 @@ node -e "
 " -- "$ARGUMENTS"
 ```
 
-If the command exits non-zero, relay the single-line message it printed to stderr verbatim (it already distinguishes still-running jobs, unknown references, ambiguous prefixes, and no-finished-jobs) and STOP.
+命令失败时原样转述错误。成功时显示 job id、状态、时长、本次配置和 Codex 原始
+输出。结果缺失时说明可能已被清理。
 
-### Step 2: Check the stored payload
-
-`stored` contains the raw Codex output and metadata. If `stored` is `null` or does not contain usable output, report `Result file missing or unreadable for job {job-id} — it may have been pruned. Run /cc-suite:status to see available jobs.` and STOP.
-
-### Step 3: Display the result
-
-```markdown
-# Codex Result
-
-**Job**: {id}
-**Kind**: {kind}
-**Status**: {status}
-**Duration**: {duration}
-**Thread ID**: `{threadId}` _(use `/continue {threadId}` to iterate)_
-
----
-
-{raw Codex output}
-
----
-
-_Job: `{id}` | Thread: `{threadId}` | Run `/continue {threadId}` to follow up._
-```
-
-If the job failed, show the error message instead of the raw output.
-
-### Step 4: Offer next steps
-
-Based on the job kind:
-- **audit**: "Fix issues with `/audit-fix`, verify with `/verify`, or drill deeper with `/continue {threadId}`"
-- **implement**: "Review changes with `git diff`, run tests, or continue with `/continue {threadId}`"
-- **bug-analyze**: "Apply the fix, or drill deeper with `/continue {threadId}`"
-- **verify**: "Run `/audit` for a fresh scan, or `/audit-fix` to fix remaining issues"
+不要按 audit/implement 等旧 kind 推荐下一步，也不要推荐 `/continue`。用户要追问
+或继续干活时，提醒重新输入 `/codex <任务>`，并重新选择配置。

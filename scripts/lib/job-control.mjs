@@ -1,7 +1,6 @@
 import fs from "node:fs";
 
 import {
-  getConfig,
   isActiveJob,
   isTerminalJob,
   listJobs,
@@ -157,7 +156,6 @@ function matchJobReference(jobs, reference, predicate = () => true) {
 
 export function buildStatusSnapshot(cwd, options = {}) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const config = getConfig(workspaceRoot);
   const jobs = sortJobsNewestFirst(
     filterJobsForCurrentSession(listJobs(workspaceRoot), options)
   );
@@ -186,11 +184,9 @@ export function buildStatusSnapshot(cwd, options = {}) {
 
   return {
     workspaceRoot,
-    config,
     running,
     latestFinished,
     recent,
-    needsReview: Boolean(config.stopReviewGate),
   };
 }
 

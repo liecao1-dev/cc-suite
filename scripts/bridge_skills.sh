@@ -2,7 +2,7 @@
 # cc-suite: expose skills to Codex via .agents/skills (idempotent).
 #
 # Two things happen:
-#   1. cc-suite's own skills (claude-review, claude-plan, etc.) are symlinked
+#   1. cc-suite's own skills (especially the explicit $claude dispatcher) are symlinked
 #      into .claude/skills/cc-suite/ so Codex can find them.
 #   2. .agents/skills → ../.claude/skills is created so the full .claude/skills/
 #      tree (project skills + cc-suite skills) is visible to Codex.

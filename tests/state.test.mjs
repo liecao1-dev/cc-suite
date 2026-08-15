@@ -73,7 +73,7 @@ test("loadState returns default state when no file exists", () => {
   try {
     const state = loadState(workspace);
     assert.equal(state.version, 1);
-    assert.deepEqual(state.config, { stopReviewGate: false });
+    assert.deepEqual(state.config, {});
     assert.deepEqual(state.jobs, []);
   } finally {
     cleanupDir(workspace);
@@ -85,7 +85,7 @@ test("saveState and loadState round-trip", () => {
   try {
     const state = {
       version: 1,
-      config: { stopReviewGate: true },
+      config: { testFlag: true },
       jobs: [
         {
           id: "job-1",
@@ -97,7 +97,7 @@ test("saveState and loadState round-trip", () => {
     };
     saveState(workspace, state);
     const loaded = loadState(workspace);
-    assert.equal(loaded.config.stopReviewGate, true);
+    assert.equal(loaded.config.testFlag, true);
     assert.equal(loaded.jobs.length, 1);
     assert.equal(loaded.jobs[0].id, "job-1");
   } finally {
@@ -194,12 +194,12 @@ test("generateJobId produces unique IDs with prefix", () => {
 test("setConfig and getConfig persist configuration", () => {
   const workspace = makeTempDir();
   try {
-    setConfig(workspace, "stopReviewGate", true);
+    setConfig(workspace, "testFlag", true);
     const config = getConfig(workspace);
-    assert.equal(config.stopReviewGate, true);
+    assert.equal(config.testFlag, true);
 
-    setConfig(workspace, "stopReviewGate", false);
-    assert.equal(getConfig(workspace).stopReviewGate, false);
+    setConfig(workspace, "testFlag", false);
+    assert.equal(getConfig(workspace).testFlag, false);
   } finally {
     cleanupDir(workspace);
   }

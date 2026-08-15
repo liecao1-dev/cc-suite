@@ -226,9 +226,8 @@ CLAUDE.local.md
 # .cc-suite/agents/ holds declared advisors and IS meant to be committed.
 .cc-suite/provenance
 .cc-suite/original-claude.md
-# Audit findings files written by /cc-suite:audit and the audit-fix loop —
-# per-run working state (findings + fix statuses), not authored content.
-.cc-suite/audits/
+# Per-project recent-dispatch state shared by Claude and Codex.
+.cc-suite/runtime/
 GI
   if want_mcp_ignore; then
     echo

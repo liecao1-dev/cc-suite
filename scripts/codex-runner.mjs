@@ -5,7 +5,7 @@
 //   node codex-runner.mjs --kind <kind> --model <model> --effort <effort> \
 //     --sandbox <sandbox> [--resume <threadId>] [--timeout-ms <ms>] \
 //     [--background] [--session-id <id>] [--summary <text>] \
-//     -- <prompt>
+//     (-- <prompt> | --prompt-stdin)
 //
 // Runs the Codex CLI directly via `codex exec` (not the MCP bridge). The MCP
 // bridge has no controllable timeout and hangs on long single responses; the
@@ -61,7 +61,7 @@ function flagValue(value, flag) {
 
 const KNOWN_FLAGS = new Set([
   "--kind", "--model", "--effort", "--sandbox", "--resume", "--timeout-ms",
-  "--background", "--session-id", "--summary",
+  "--background", "--prompt-stdin", "--session-id", "--summary",
 ]);
 
 function parseArgs(argv) {
@@ -73,6 +73,7 @@ function parseArgs(argv) {
     resume: null,
     timeoutMs: DEFAULT_TIMEOUT_MS,
     background: false,
+    promptStdin: false,
     sessionId: null,
     summary: null,
     prompt: null,
@@ -90,6 +91,11 @@ function parseArgs(argv) {
     }
     if (arg === "--background") {
       args.background = true;
+      i += 1;
+      continue;
+    }
+    if (arg === "--prompt-stdin") {
+      args.promptStdin = true;
       i += 1;
       continue;
     }
@@ -129,6 +135,14 @@ function parseArgs(argv) {
         break;
       }
     }
+  }
+
+  if (args.promptStdin) {
+    if (args.prompt !== null) {
+      process.stderr.write("Error: use either --prompt-stdin or -- <prompt>, not both\n");
+      process.exit(1);
+    }
+    args.prompt = fs.readFileSync(0, "utf8");
   }
 
   return args;
@@ -507,7 +521,7 @@ async function main() {
   const args = parseArgs(process.argv);
 
   if (!args.prompt) {
-    process.stderr.write("Error: no prompt provided. Use -- <prompt>\n");
+    process.stderr.write("Error: no prompt provided. Use -- <prompt> or --prompt-stdin\n");
     process.exit(1);
   }
 

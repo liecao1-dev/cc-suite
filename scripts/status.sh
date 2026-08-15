@@ -19,7 +19,7 @@ mark() {
 # reporting it as broken trains users to ignore this report. Falls back to the
 # same defaults as the bridges when the file or section is missing.
 ENABLED_TOOLS="$(python3 "${SCRIPT_DIR}/bridge_tools.py" --enabled 2>/dev/null || true)"
-[ -n "$ENABLED_TOOLS" ] || ENABLED_TOOLS=$'claude\ncodex\nantigravity'
+[ -n "$ENABLED_TOOLS" ] || ENABLED_TOOLS=$'claude\ncodex'
 tool_enabled() { printf '%s\n' "$ENABLED_TOOLS" | grep -qx "$1"; }
 
 echo "cc-suite status — $(pwd)"
@@ -86,7 +86,7 @@ if [ -L .agents/skills ]; then
 elif [ -d .agents/skills ]; then
   mark ".agents/skills" warn "real directory (not symlink)"
 else
-  mark ".agents/skills" miss "→ run /cc-suite:bridge-skills"
+  mark ".agents/skills" miss "→ run /cc-suite:repair"
 fi
 
 # .claude/skills/cc-suite symlink (plugin skills exposed to Codex)
@@ -95,19 +95,31 @@ if [ -L .claude/skills/cc-suite ]; then
     _skill_count="$(find .claude/skills/cc-suite/ -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
     mark ".claude/skills/cc-suite" ok "→ plugin skills (${_skill_count} skills visible to Codex)"
   else
-    mark ".claude/skills/cc-suite" warn "symlink broken — run /cc-suite:bridge-skills"
+    mark ".claude/skills/cc-suite" warn "symlink broken — run /cc-suite:repair"
   fi
 elif [ -d .claude/skills/cc-suite ]; then
   mark ".claude/skills/cc-suite" warn "real directory (not symlink) — Codex may see stale skills"
 else
-  mark ".claude/skills/cc-suite" miss "plugin skills not exposed — run /cc-suite:bridge-skills"
+  mark ".claude/skills/cc-suite" miss "plugin skills not exposed — run /cc-suite:repair"
+fi
+
+# Literal daily dispatcher installed by init.sh. A user-owned collision is a
+# warning rather than something cc-suite overwrites.
+if [ -f .claude/commands/codex.md ]; then
+  if grep -q '^<!-- cc-suite-dispatcher: codex sha256=' .claude/commands/codex.md; then
+    mark "/codex dispatcher" ok ".claude/commands/codex.md"
+  else
+    mark "/codex dispatcher" warn "same-name user command preserved — use /cc-suite:codex"
+  fi
+else
+  mark "/codex dispatcher" miss "run /cc-suite:init"
 fi
 
 # .codex
 if tool_enabled codex; then
   [ -d .codex/prompts ]    && mark ".codex/prompts/"    ok "" || mark ".codex/prompts/"    miss
   [ -f .codex/hooks.json ] && mark ".codex/hooks.json"  ok "$(wc -c < .codex/hooks.json | tr -d ' ') bytes" \
-                           || mark ".codex/hooks.json"  miss "(run /cc-suite:bridge-hooks)"
+                           || mark ".codex/hooks.json"  miss "(optional when the project has no shared hooks)"
   [ -f .codex/config.toml ] && mark ".codex/config.toml" ok "" \
                              || mark ".codex/config.toml" miss "(run /cc-suite:init)"
 else
@@ -118,9 +130,7 @@ fi
 [ -d .gemini ] && mark ".gemini/" warn "legacy Google project dir — migrate skills/config to .agents/"
 
 # Antigravity workspace MCP configuration.
-if ! tool_enabled antigravity; then
-  mark ".agents/mcp_config.json → agy" miss "(Antigravity is not enabled)"
-elif [ -f .agents/mcp_config.json ]; then
+if tool_enabled antigravity && [ -f .agents/mcp_config.json ]; then
   if [ -f .agents/.cc-suite-mcp.provenance.json ]; then
     _agy_mcp_count=$(python3 -c '
 import json
@@ -133,18 +143,15 @@ except Exception:
   else
     mark ".agents/mcp_config.json → agy" warn "user-managed config — cc-suite will not overwrite it"
   fi
-else
-  mark ".agents/mcp_config.json → agy" miss "run /cc-suite:bridge-mcp"
+elif tool_enabled antigravity; then
+  mark ".agents/mcp_config.json → agy" miss "run /cc-suite:repair"
 fi
 
-# Fast local check only; /cc-suite:agy-preflight performs the live model/auth
-# probe with a deadline.
-if ! tool_enabled antigravity; then
-  mark "agy CLI" miss "(Antigravity is not enabled)"
-elif command -v agy >/dev/null 2>&1; then
+# Fast local check for the legacy optional Antigravity projection.
+if tool_enabled antigravity && command -v agy >/dev/null 2>&1; then
   _agy_version=$(agy --version 2>/dev/null | head -1 | tr -d '\r')
   mark "agy CLI" ok "${_agy_version:-version unknown}"
-else
+elif tool_enabled antigravity; then
   mark "agy CLI" warn "not found — install: curl -fsSL https://antigravity.google/cli/install.sh | bash"
 fi
 
@@ -273,8 +280,6 @@ PY
     warn"$_tab"*) mark ".cc-suite/agents/" warn "${_advisor_report#warn"$_tab"} — run /cc-suite:repair" ;;
     *)            mark ".cc-suite/agents/" warn "could not compare declared vs registered advisors (python3 unavailable?)" ;;
   esac
-else
-  mark ".cc-suite/agents/" miss "(no advisor agents declared — add one with /cc-suite:add-agent)"
 fi
 
 # .gitignore sentinel
@@ -410,26 +415,4 @@ print("untrusted")
     printf '      to ~/.codex/config.toml\n'
   fi
 
-  # plugin_hooks feature flag — required for plugin-bundled hooks to fire.
-  # Read through the diagnose engine's parser: it requires the value to be the
-  # TOML boolean `true` under `[features]`, where the prefix scan this used to
-  # do reported `plugin_hooks = truegarbage` (which Codex cannot parse) as
-  # enabled — and it keeps the two readouts from drifting apart.
-  _plugin_hooks=$(python3 -c '
-import sys, pathlib
-sys.path.insert(0, sys.argv[1])
-from diagnose import plugin_hooks_enabled
-text = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
-print("enabled" if plugin_hooks_enabled(text) else "disabled")
-' "$SCRIPT_DIR" "$CODEX_CFG" 2>/dev/null)
-  case "${_plugin_hooks:-}" in
-    enabled)
-      mark "plugin_hooks" ok "enabled in ~/.codex/config.toml" ;;
-    disabled)
-      mark "plugin_hooks" warn "not set — plugin-bundled hooks are inert"
-      printf '    → add to ~/.codex/config.toml:\n'
-      printf '      [features]\n      plugin_hooks = true\n' ;;
-    *)
-      mark "plugin_hooks" warn "could not read ~/.codex/config.toml (python3 unavailable?)" ;;
-  esac
 fi

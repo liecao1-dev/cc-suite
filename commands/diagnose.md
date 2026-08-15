@@ -60,7 +60,6 @@ AskUserQuestion:
 For each `issue` check, in report order:
 
 - Run its `fix.auto` commands in sequence. Capture each exit code; on non-zero, report the failure verbatim, skip that check's remaining commands, and continue with the next check — a failed fix must never be counted as applied.
-- **`model_pin`** is the one editor fix: rewrite the `- **Default model**:` line in `.cc-suite.md` to `latest` with a single-line Edit (deterministic; write a concrete slug only if the user explicitly asks for a fresh pin). Touch nothing else in the file.
 - Checks with only `fix.manual` (and all `manual`-status checks): collect and present as the user's to-do list — do not attempt them.
 - Collect every applied fix with `restart_required: true`; after all fixes, tell the user which changes need a Claude Code restart to take effect.
 
@@ -76,4 +75,4 @@ Report the counts: "{fixed} fixed, {pending} pending restart, {remaining} remain
 
 ### Step 7: If issues remain
 
-Close with: "Issues remain. Next step: run `/cc-suite:repair` for a full non-interactive re-run of all setup scripts. If that also fails, run `/cc-suite:init` for a complete interactive re-initialization."
+Close with: "Issues remain. Next step: run `/cc-suite:repair` for a full non-interactive re-run of all setup scripts. If that also fails, run `/cc-suite:init` for a complete re-initialization."

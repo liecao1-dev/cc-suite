@@ -16,6 +16,8 @@ Ask the user via AskUserQuestion before doing anything. List exactly what will b
 - `AGENTS.md` (content will be restored to `CLAUDE.md` automatically — no manual copy needed)
 - Legacy `GEMINI.md` — only if it contains nothing but `@AGENTS.md` (bare import); hybrid files are left alone
 - `.agents/skills` symlink (not the `.claude/skills/` target it points to)
+- cc-suite 生成且从未被用户编辑的 `.claude/commands/codex.md`；用户同名或已编辑文件保留
+- `.cc-suite/runtime/` 中 cc-suite 管理的最近配置状态（同名符号链接保留）
 - `.agents/mcp_config.json` only if it carries cc-suite provenance; user-managed entries are preserved
 - `.codex/prompts/` (if empty), `.codex/hooks.json` and `.codex/hooks.cc-suite.json` (each only if cc-suite generated it), `.codex/config.toml` (sentinel block only)
 - Empty legacy `.gemini/skills/` and `.gemini/commands/` directories
@@ -35,7 +37,7 @@ Backups the script may leave behind — report every one it prints, they are fil
 - If either name is taken, a numbered suffix is added (`.1`, `.2`, …). An existing backup is never overwritten.
 
 What is **never** touched:
-- `.claude/`, `.mcp.json`, custom `GEMINI.md`, and non-empty legacy `.gemini/` content
+- `.mcp.json`, custom `GEMINI.md`, non-empty legacy `.gemini/` content, and every user-owned file under `.claude/`
 
 What is removed **only if cc-suite generated it**:
 - `.codex/hooks.json` — only if it was written by `bridge_hooks.py`: `_cc_bridge_version` must be exactly the string `"1"`, the only top-level keys may be `_cc_bridge_version` and `hooks`, and every event in it must be one of the five shared events. Anything else is left alone.
@@ -73,7 +75,7 @@ Unbridge complete:
   ✓ CLAUDE.md    restored from AGENTS.md  (or: left alone — had own content)
   ! <backup>     kept — <what it holds>
 
-.mcp.json and .claude/ were not modified.
+.mcp.json and user-owned .claude/ content were not modified.
 ```
 
 Include one `!` line per backup file the script reported, naming what it holds. Omit the line entirely when there were none.

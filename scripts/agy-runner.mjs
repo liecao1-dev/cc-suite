@@ -457,7 +457,7 @@ async function runForeground(cwd, args) {
   const result = await executeAgy(cwd, args, logFile);
 
   // threadId is the shared job-record field name across backends; for agy it
-  // carries the conversation uuid so /cc-suite:continue works uniformly.
+  // carries the conversation uuid for internal diagnostics and explicit resume.
   upsertJob(cwd, {
     id: jobId,
     status: result.status,

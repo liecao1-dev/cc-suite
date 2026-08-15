@@ -27,7 +27,7 @@ test("the boundary names every skill that delegates back to Claude", () => {
     );
   }
   assert.ok(
-    /do not activate or invoke workspace skills/i.test(DELEGATION_BOUNDARY),
+    /do not activate or invoke the \$claude workspace skill/i.test(DELEGATION_BOUNDARY),
     "Boundary should forbid both activation and invocation"
   );
 });
@@ -91,23 +91,23 @@ test("the boundary is applied where the child is invoked, not where args parse",
   }
 });
 
-test("the Codex preamble keeps the same promise as the shared boundary", () => {
-  // The Codex lane builds its preamble from prose, so it cannot import the
+test("the /codex prompt keeps the same promise as the shared boundary", () => {
+  // The Claude command builds its prompt from prose, so it cannot import the
   // module. Hold both to the same invariant sentences to stop them drifting.
-  const partial = fs.readFileSync(
-    path.join(PLUGIN_ROOT, "commands", "shared", "codex-call.md"),
+  const command = fs.readFileSync(
+    path.join(PLUGIN_ROOT, "commands", "codex.md"),
     "utf8"
   );
   for (const sentence of BOUNDARY_INVARIANTS) {
     assert.ok(
-      partial.includes(sentence),
-      `codex-call.md is missing the invariant sentence: ${sentence}`
+      command.includes(sentence),
+      `commands/codex.md is missing the invariant sentence: ${sentence}`
     );
   }
   for (const skill of DELEGATING_SKILLS) {
     assert.ok(
-      partial.includes(`$${skill}`),
-      `codex-call.md should name $${skill} in the delegation boundary`
+      command.includes(`$${skill}`),
+      `commands/codex.md should name $${skill} in the delegation boundary`
     );
   }
 });

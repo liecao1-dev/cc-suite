@@ -1,5 +1,11 @@
 # Supporting more coding agents (and a China-first lens)
 
+> **v3 status:** this is an archived expansion design, not the current user
+> guide. cc-suite 3 exposes only `/codex` and `$claude`. The registry backends
+> described below remain internal compatibility code; any future model must
+> adopt the same model-named, plain-language, per-dispatch configuration
+> contract before becoming public.
+
 A design proposal for how `cc-suite` should scale beyond Claude Code / Codex CLI / Antigravity to additional agentic coding CLIs — **Grok Build, opencode, Qwen Code, Kimi CLI, and others** — as **user-selectable** targets, with an explicit look at which tools are actually usable in **mainland China**.
 
 **This is a design document only. No code changes are proposed here** — it defines the architecture, the per-tool adapter specs, and the selection model so implementation can be scoped and sequenced afterward.
@@ -144,16 +150,18 @@ Selection rides on the existing per-project `.cc-suite.md` config (already gener
 - [ ] kimi
 ```
 
-Mechanics:
+Original v2 mechanics (retained here as design history):
 
-- **`/cc-suite:init`** writes the section (all-checked for the current three, unchecked for the new tools) and `/cc-suite:bridge-tools` offers a multi-select to flip them, surfacing each tool's China tier.
+- v2 proposed an initialization-time multi-select and a separate bridge command.
 - **`bridge_tools.py` reads the enabled set**; `bridge-tools` and `repair` mirror into every enabled registry tool. A present-but-empty section is treated as a placeholder → defaults.
 - **A `--tools grok,opencode` flag** overrides the enabled set for one-off runs; `--status` prints the enabled set + tiers; `--unbridge` tears the tool configs down.
-- **Default stays `claude, codex, antigravity`** so existing projects are unaffected.
+- The v3 default is `claude, codex`; there is no public multi-tool picker.
 
 Claude is always implicitly on — it is the source of truth the others mirror from.
 
-> **Implementation status (July 2026):** §4–§7 are implemented — `scripts/bridge_tools.py` (registry + engine + the three MCP emitters + selection/unbridge), the `/cc-suite:bridge-tools` command, and wiring into `init`, `repair`, `unbridge`, and `.gitignore`. Grok, opencode, Qwen, and Kimi all bridge from their profiles; Claude/Codex/Antigravity intentionally stay on their existing scripts (`bridged_by: "existing"`). Deferred: the opencode hooks TS-plugin generator (§6.2) and the §8 option-2 provider profile.
+> **v3 implementation status (August 2026):** `scripts/bridge_tools.py` and its
+> emitters remain for compatibility and tests, but their public command was
+> removed. New targets are deferred until they can use the v3 dispatch contract.
 
 ---
 
@@ -169,7 +177,8 @@ Ranked by integration effort (cheapest first). "Free" = handled by cc-suite's ex
 - **Divergence:** subagents (`.grok/agents/` markdown or `[subagents.roles.*]` TOML) — leave unbridged. (Note: Grok *does* read `.claude/agents/` as subagents natively, so Claude subagents come for free.)
 - **Profile:** `instructions=native-agents-md, skills=native-claude-path, mcp=toml-mcp_servers/.grok/config.toml, hooks=native-claude`.
 
-> **Also built (beyond this config bridge): a Claude → Grok *delegation* lane.** Separate from mirroring MCP config, `scripts/grok-runner.mjs` drives `grok agent stdio` as an **Agent Client Protocol (ACP) client** (`/cc-suite:grok`), with a fast local `/cc-suite:grok-preflight`. This parallels the codex/agy delegation runners, not the config-bridge registry this doc describes — see the README's "Claude → Grok delegation (ACP)" section.
+> **Legacy implementation note:** `scripts/grok-runner.mjs` and its preflight
+> remain as internal compatibility code. v3 exposes no Grok command.
 
 ### 6.2 opencode (SST) — low effort
 

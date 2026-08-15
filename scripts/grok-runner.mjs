@@ -20,7 +20,7 @@
 //
 // and accumulate `agent_message_chunk` text from the streamed `session/update`
 // notifications as the answer. The session id ACP returns is stored as the
-// job's threadId, so /cc-suite:continue resumes the same Grok session.
+// job's threadId for internal diagnostics and explicit backend resume calls.
 //
 // Sandbox mapping (cc-suite vocabulary → ACP permission behavior):
 //   read-only          → no --always-approve; the client REJECTS permission
