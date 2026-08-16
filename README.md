@@ -8,6 +8,9 @@ cc-suite 3 把 Claude Code 与 Codex 之间的协作收成两个入口：
 
 # 在 Codex 里
 $claude 帮我把这份 README 改得让新手能直接照着安装
+
+# 也可以先打开配置选择，选完后再输入任务
+$claude
 ```
 
 任务直接用大白话写。没有 `implement`、`audit`、`review-plan`、
@@ -58,11 +61,13 @@ $claude 帮我把这份 README 改得让新手能直接照着安装
 日常写法：
 
 ```text
+$claude
 $claude <任务>
 ```
 
 `$claude` 是显式 Codex skill，不会被自然语言隐式触发。它通过项目锁定的
-`claude-octopus` MCP 服务调用 Claude Code。
+`claude-octopus` MCP 服务调用 Claude Code。只发送 `$claude` 并回车时，会先
+显示配置选择；选完后再询问本次任务。若一开始就附带任务，也仍然先选配置。
 
 配置字段：
 
@@ -108,7 +113,7 @@ claude --plugin-dir /absolute/path/to/cc-suite
 | 入口 | 用途 |
 |---|---|
 | `/codex <任务>` | 派遣给 Codex |
-| `$claude <任务>` | 派遣给 Claude |
+| `$claude` 或 `$claude <任务>` | 先选配置，再派遣给 Claude |
 | `/cc-suite:init` | 初始化双向通道 |
 | `/cc-suite:status` | 查看桥接和 job 状态 |
 | `/cc-suite:diagnose` | 诊断配置问题 |

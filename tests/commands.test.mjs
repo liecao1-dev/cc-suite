@@ -5,6 +5,13 @@ import assert from "node:assert/strict";
 
 const PLUGIN_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const COMMANDS_DIR = path.join(PLUGIN_ROOT, "commands");
+const CLAUDE_SKILL_PATH = path.join(
+  PLUGIN_ROOT,
+  "skills",
+  "cc-suite",
+  "claude",
+  "SKILL.md"
+);
 const PUBLIC_COMMANDS = [
   "cancel",
   "codex",
@@ -90,6 +97,27 @@ test("init installs exactly the two model-named dispatch directions", () => {
   assert.match(content, /scripts\/mcp_claude\.sh/);
   assert.match(content, /不在初始化时锁定/);
   assert.match(content, /不要再推荐 `\/implement`/);
+});
+
+test("a bare $claude invocation chooses configuration before asking for a task", () => {
+  const content = fs.readFileSync(CLAUDE_SKILL_PATH, "utf8");
+  assert.match(content, /单独提交 \$claude/);
+  assert.match(content, /第一项用户可见交互必须是配置选择/);
+  assert.match(content, /也不得先询问任务/);
+
+  const loadConfiguration = content.indexOf("### 1. 加载配置选项");
+  const chooseConfiguration = content.indexOf("### 2. 立即让用户选择");
+  const obtainTask = content.indexOf("### 3. 取得任务");
+  assert.ok(loadConfiguration >= 0, "the skill must load configuration first");
+  assert.ok(
+    chooseConfiguration > loadConfiguration,
+    "the skill must show the chooser after loading profiles"
+  );
+  assert.ok(
+    obtainTask > chooseConfiguration,
+    "the skill must not ask for a missing task before configuration selection"
+  );
+  assert.match(content, /询问“这次要 Claude 做什么？”/);
 });
 
 test("plugin hooks track job lifecycle without the removed audit gate", () => {

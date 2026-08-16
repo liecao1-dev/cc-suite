@@ -1,7 +1,7 @@
 interface:
   display_name: "派遣给 Claude"
-  short_description: "每次手选模型配置，再把任务交给 Claude Code"
-  default_prompt: "Use $claude to send this task to Claude Code after I choose the configuration."
+  short_description: "每次先手动选择 Claude 模型配置，再输入或派遣本次任务"
+  default_prompt: "Use $claude to let me choose a Claude configuration first, then ask for my task."
 dependencies:
   tools:
     - type: "mcp"
