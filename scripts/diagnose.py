@@ -242,7 +242,7 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
     codex_hooks = _read(ROOT / ".codex/hooks.json") or ""
     if hook_script in codex_hooks and "--host codex --target claude" in codex_hooks:
         out.append(check("codex_dispatch_hook", "Codex dispatch hook", "healthy",
-                         "selected composer tuple is consumed when the real task is submitted"))
+                         "installed; Codex separately requires the current command hash to be trusted via /hooks"))
     else:
         out.append(check("codex_dispatch_hook", "Codex dispatch hook", "issue",
                          "project-local UserPromptSubmit handler is missing",

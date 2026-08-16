@@ -74,6 +74,13 @@ hooks 只安装在显式同步的项目范围内，不写 `~/.codex` 或 `~/.cla
 原 CLI。首次在项目中使用时，Codex 或 Claude Code 仍可能要求信任该项目；未信任时
 会明确停止，不会让宿主模型冒充目标模型。
 
+Codex 首次发现这条命令 hook，或者 hook 内容升级后，会显示 `Hooks need review`。
+先选 `Review hooks` 核对命令指向本仓库的 `scripts/dispatch-hook.mjs`，再信任该条
+cc-suite hook；如果当前 `.codex/hooks.json` 里确认只有 cc-suite 这一条，也可以选
+`Trust all and continue`。不要选 `Continue without trusting`：发送前配置面板仍可能
+弹出，但之后的真实任务不会按所选配置派遣。Codex 按 hook 当前内容的 hash 记住
+信任，因此内容未变化时不需要每次确认；可随时用 `/hooks` 复查或撤销。
+
 普通派遣直接调用已登录的 `codex` 或 `claude` CLI，所以不需要在每个仓库写
 `.codex/config.toml` 或安装项目级 Claude MCP。两个 runner 都有 15 分钟硬截止、
 job 记录和禁止把任务派回原模型的边界。后端缺失、未认证或失败时会明确停止，

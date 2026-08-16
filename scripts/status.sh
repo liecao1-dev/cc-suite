@@ -113,7 +113,7 @@ fi
 
 _dispatch_script="${SCRIPT_DIR}/dispatch-hook.mjs"
 if [ -f .codex/hooks.json ] && grep -Fq "${_dispatch_script}" .codex/hooks.json && grep -Fq -- '--host codex --target claude' .codex/hooks.json; then
-  mark "Codex dispatch hook" ok 'consumes the selected tuple when the real task is sent'
+  mark "Codex dispatch hook" ok 'installed — Codex separately reviews the current command hash via /hooks'
 else
   mark "Codex dispatch hook" miss 'run /cc-suite:repair and trust the project'
 fi
@@ -420,7 +420,7 @@ for line in config.splitlines():
 print("untrusted")
 ' "$CODEX_CFG" "$REPO_ABS" 2>/dev/null)
   if [ "${_trust:-untrusted}" = "trusted" ]; then
-    mark "project trust" ok "trusted — hooks, rules, and .codex/config.toml are active"
+    mark "project trust" ok "trusted — project layer is loadable; command hook hashes still need separate /hooks review"
   else
     mark "project trust" warn "NOT trusted — hooks, rules, and .codex/config.toml are inert"
     printf '    → run Codex once and accept the trust prompt, or add:\n'
