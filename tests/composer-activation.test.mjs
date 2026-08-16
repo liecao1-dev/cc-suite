@@ -50,6 +50,22 @@ test("composer activation is scoped, idempotent, inspectable, and reversible", (
     assert.match(fs.readFileSync(shellFile, "utf8"), /cc-suite-composer-activation/);
     assert.deepEqual(inspectComposerActivation(scope).problems, []);
 
+    const inheritedPath = `${realBin}:${path.dirname(codexShim)}:${realBin}`;
+    const sourced = spawnSync("/bin/zsh", [
+      "-fc",
+      'source "$1"; print -rl -- "$path[@]"',
+      "zsh",
+      shellFile,
+    ], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: inheritedPath },
+    });
+    assert.equal(sourced.status, 0, sourced.stderr);
+    const resolvedPath = sourced.stdout.trim().split("\n");
+    const shimDirectory = fs.realpathSync.native(path.dirname(codexShim));
+    assert.equal(resolvedPath[0], shimDirectory);
+    assert.equal(resolvedPath.filter((entry) => entry === shimDirectory).length, 1);
+
     const second = installComposerActivation({
       scopeRoot: scope,
       sourceRoot: SOURCE_ROOT,
@@ -100,4 +116,5 @@ test("composer activation refuses a user-owned shim", () => {
 test("shell activation explicitly documents its cwd-only behavior", () => {
   assert.match(composerShellBlock("/tmp/projects"), /change composer behavior only while cwd is inside/);
   assert.match(composerShellBlock("/tmp/projects"), /\/tmp\/projects\/\.cc-suite\/bin/);
+  assert.match(composerShellBlock("/tmp/projects"), /path=\(/);
 });

@@ -105,11 +105,16 @@ export function composerShimIsOwned(text) {
 
 export function composerShellBlock(scopeRoot) {
   const bin = path.join(scopeRoot, ".cc-suite", "bin");
-  const pathNeedle = shellQuote(`:${bin}:`);
   return [
     SHELL_OPEN,
     `# The shims below change composer behavior only while cwd is inside ${scopeRoot}.`,
-    `case ":$PATH:" in *${pathNeedle}*) ;; *) export PATH=${shellQuote(bin)}:"$PATH" ;; esac`,
+    `typeset _cc_suite_composer_bin=${shellQuote(bin)}`,
+    // Rebuild zsh's tied $path array instead of checking only for presence.
+    // A parent shell may already carry this entry at low precedence; merely
+    // seeing it would otherwise leave the real CLI ahead of the shim.
+    `path=("$_cc_suite_composer_bin" "\${(@)path:#\${(b)_cc_suite_composer_bin}}")`,
+    "export PATH",
+    "unset _cc_suite_composer_bin",
     SHELL_CLOSE,
   ].join("\n");
 }
