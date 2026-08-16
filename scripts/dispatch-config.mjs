@@ -122,9 +122,57 @@ function validateAgainstCatalog(target, config, catalog) {
   });
 }
 
+function resolveProfile(target, profileId, catalog, cwd) {
+  const fallback = defaultConfig(target, catalog);
+  let config;
+  let resolvedFrom = profileId;
+  let usedInitialDefault = false;
+
+  if (profileId === "recent") {
+    const recent = readRecentDispatch(getConfig(cwd), target);
+    if (recent) {
+      try {
+        config = validateAgainstCatalog(target, recent, catalog);
+      } catch {
+        // A removed model or capability must not leave the quick picker stuck.
+        // Treat stale state exactly like a first use and make the fallback
+        // visible in the machine-readable result.
+      }
+    }
+    if (!config) {
+      config = validateAgainstCatalog(target, fallback, catalog);
+      resolvedFrom = "default";
+      usedInitialDefault = true;
+    }
+  } else if (profileId === "default") {
+    config = validateAgainstCatalog(target, fallback, catalog);
+  } else if (profileId.startsWith("model:")) {
+    const model = profileId.slice("model:".length);
+    if (!catalog.models.includes(model)) {
+      throw new Error(`${target} model is not in the current catalog: ${model}`);
+    }
+    const detail = catalog.modelsDetail.find((entry) => entry.slug === model);
+    const supportedEfforts = detail?.reasoning_efforts?.length
+      ? detail.reasoning_efforts
+      : catalog.efforts;
+    const preferredEffort = TARGETS[target].defaultEffort;
+    config = validateAgainstCatalog(target, {
+      model,
+      effort: supportedEfforts.includes(preferredEffort)
+        ? preferredEffort
+        : (supportedEfforts[0] ?? preferredEffort),
+      access: TARGETS[target].defaultAccess,
+    }, catalog);
+  } else {
+    throw new Error(`unsupported profile: ${profileId}`);
+  }
+
+  return { config, resolvedFrom, usedInitialDefault };
+}
+
 const args = parseArgs(process.argv.slice(2));
-if (!args.command || !["list", "record", "recent"].includes(args.command)) {
-  fail("usage: dispatch-config.mjs <list|record|recent> --target <codex|claude> [--cwd <dir>] ...");
+if (!args.command || !["list", "resolve", "record", "recent"].includes(args.command)) {
+  fail("usage: dispatch-config.mjs <list|resolve|record|recent> --target <codex|claude> [--cwd <dir>] ...");
 }
 if (!args.target) fail("--target is required");
 if (!Object.hasOwn(TARGETS, args.target)) fail(`unsupported target: ${args.target}`);
@@ -171,6 +219,28 @@ if (args.command === "list") {
     });
   } catch (error) {
     output({ status: "error", target: args.target, errorCode: "config_list_failed", error: error.message });
+  }
+  process.exit(0);
+}
+
+if (args.command === "resolve") {
+  if (!args.profile) fail("--profile is required");
+  try {
+    const resolved = resolveProfile(args.target, args.profile, catalog, cwd);
+    output({
+      status: "ok",
+      target: args.target,
+      profile: args.profile,
+      ...resolved,
+      metadata: catalog.metadata,
+    });
+  } catch (error) {
+    output({
+      status: "error",
+      target: args.target,
+      errorCode: "profile_resolution_failed",
+      error: error.message,
+    });
   }
   process.exit(0);
 }

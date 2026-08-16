@@ -366,6 +366,33 @@ fi
 # delete a real user skill or a symlink pointing somewhere unrelated.
 bash "${SCRIPT_DIR}/uninstall_dispatchers.sh"
 
+CLAUDE_SKILL_NAMES=(
+  claude-1-recent
+  claude-2-default
+  claude-3-sonnet
+  claude-4-opus
+  claude-5-haiku
+)
+
+for _skill_name in "${CLAUDE_SKILL_NAMES[@]}"; do
+  _skill_path=".agents/skills/${_skill_name}"
+  if [ -L "$_skill_path" ]; then
+    _skill_target="$(readlink "$_skill_path")"
+    case "$_skill_target" in
+      */skills/cc-suite/"${_skill_name}")
+        rm "$_skill_path"
+        ok "removed ${_skill_path} symlink"
+        ;;
+      *)
+        skip "${_skill_path} points to ${_skill_target} — not cc-suite-owned, left alone"
+        ;;
+    esac
+  else
+    skip "${_skill_path} not a symlink"
+  fi
+done
+
+# Remove the v3.0 conversational chooser when upgrading and then unbridging.
 if [ -L .agents/skills/claude ]; then
   _agents_claude_target="$(readlink .agents/skills/claude)"
   case "$_agents_claude_target" in

@@ -5,13 +5,14 @@ import assert from "node:assert/strict";
 
 const PLUGIN_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const COMMANDS_DIR = path.join(PLUGIN_ROOT, "commands");
-const CLAUDE_SKILL_PATH = path.join(
-  PLUGIN_ROOT,
-  "skills",
-  "cc-suite",
-  "claude",
-  "SKILL.md"
-);
+const CLAUDE_SKILLS_DIR = path.join(PLUGIN_ROOT, "skills", "cc-suite");
+const CLAUDE_SKILL_PROFILES = new Map([
+  ["claude-1-recent", "recent"],
+  ["claude-2-default", "default"],
+  ["claude-3-sonnet", "model:sonnet"],
+  ["claude-4-opus", "model:opus"],
+  ["claude-5-haiku", "model:haiku"],
+]);
 const PUBLIC_COMMANDS = [
   "cancel",
   "codex",
@@ -92,32 +93,39 @@ test("the Codex dispatcher requires manual per-call selection and fails closed",
 test("init installs exactly the two model-named dispatch directions", () => {
   const content = readCommand("init");
   assert.match(content, /\/codex <任务>/);
-  assert.match(content, /\$claude <任务>/);
+  assert.match(content, /先输入 `\$claude`/);
+  assert.match(content, /发送前选配置/);
   assert.match(content, /scripts\/install_dispatchers\.sh|scripts\/init\.sh/);
   assert.match(content, /scripts\/mcp_claude\.sh/);
   assert.match(content, /不在初始化时锁定/);
   assert.match(content, /不要再推荐 `\/implement`/);
 });
 
-test("a bare $claude invocation chooses configuration before asking for a task", () => {
-  const content = fs.readFileSync(CLAUDE_SKILL_PATH, "utf8");
-  assert.match(content, /单独提交 \$claude/);
-  assert.match(content, /第一项用户可见交互必须是配置选择/);
-  assert.match(content, /也不得先询问任务/);
+test("$claude exposes ordered configuration choices before submission", () => {
+  const onDisk = fs
+    .readdirSync(CLAUDE_SKILLS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  assert.deepEqual(onDisk, [...CLAUDE_SKILL_PROFILES.keys()]);
 
-  const loadConfiguration = content.indexOf("### 1. 加载配置选项");
-  const chooseConfiguration = content.indexOf("### 2. 立即让用户选择");
-  const obtainTask = content.indexOf("### 3. 取得任务");
-  assert.ok(loadConfiguration >= 0, "the skill must load configuration first");
-  assert.ok(
-    chooseConfiguration > loadConfiguration,
-    "the skill must show the chooser after loading profiles"
-  );
-  assert.ok(
-    obtainTask > chooseConfiguration,
-    "the skill must not ask for a missing task before configuration selection"
-  );
-  assert.match(content, /询问“这次要 Claude 做什么？”/);
+  let expectedIndex = 1;
+  for (const [skillName, profile] of CLAUDE_SKILL_PROFILES) {
+    const skillDir = path.join(CLAUDE_SKILLS_DIR, skillName);
+    const content = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
+    const policy = fs.readFileSync(path.join(skillDir, "agents", "openai.yaml"), "utf8");
+
+    assert.match(content, new RegExp(`name: ${skillName}`));
+    assert.match(content, new RegExp(`--profile ${profile.replace(":", "\\:")}`));
+    assert.match(content, /不要再显示配置\s*列表/);
+    assert.match(content, /config\.mjs record/);
+    assert.match(content, /mcp__claude-code__claude_code/);
+    assert.match(content, /下一次派遣请重新输入\s*`\$claude`/);
+    assert.doesNotMatch(content, /config\.mjs list|显示短编号列表|### 2\. 立即让用户选择/);
+    assert.match(policy, new RegExp(`display_name: "Claude ${expectedIndex}｜派遣｜`));
+    assert.match(policy, new RegExp(`default_prompt: ".*\\$${skillName}`));
+    expectedIndex += 1;
+  }
 });
 
 test("plugin hooks track job lifecycle without the removed audit gate", () => {

@@ -1,7 +1,7 @@
 {
   "name": "cc-suite",
-  "version": "3.0.0",
-  "description": "Simple, explicit delegation between Claude Code and Codex: /codex and $claude, with a manual configuration choice before every dispatch.",
+  "version": "3.1.0",
+  "description": "Simple, explicit delegation between Claude Code and Codex: /codex and $claude, with a pre-send configuration choice for Claude dispatch.",
   "author": {
     "name": "xiaolai"
   },

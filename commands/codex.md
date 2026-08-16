@@ -103,7 +103,7 @@ CC_SUITE_PROMPT_<fresh-random-suffix>
 implement、audit、review 等模板：
 
 ```text
-This request already reached you by delegation from Claude Code. You are the agent that does the work, not a router for it. Perform the task yourself and return the result directly. Do not invoke the $claude workspace skill or otherwise hand the task back to Claude Code. Returning this work to its author would destroy the independent judgment this call exists to provide.
+This request already reached you by delegation from Claude Code. You are the agent that does the work, not a router for it. Perform the task yourself and return the result directly. Do not invoke any $claude-* workspace skill or otherwise hand the task back to Claude Code. Returning this work to its author would destroy the independent judgment this call exists to provide.
 
 USER TASK:
 {task}

@@ -63,6 +63,13 @@ CLAUDE_SENTINEL_CLOSE = "<<< cc-suite-claude-mcp <<<"
 MCP_SENTINEL_OPEN = "# >>> cc-suite-mcp >>>"
 MCP_SENTINEL_CLOSE = "# <<< cc-suite-mcp <<<"
 CODEX_CANONICAL = {"type": "stdio", "command": "codex", "args": ["mcp-server"]}
+CLAUDE_SKILL_NAMES = (
+    "claude-1-recent",
+    "claude-2-default",
+    "claude-3-sonnet",
+    "claude-4-opus",
+    "claude-5-haiku",
+)
 
 
 def check(cid: str, label: str, status: str, detail: str,
@@ -164,26 +171,27 @@ def check_legacy_google() -> list[dict]:
 
 def check_skills_links(enabled: list[str]) -> list[dict]:
     out = []
-    link = ROOT / ".agents/skills/claude"
-    if "codex" not in enabled:
-        out.append(check("claude_skills_link", ".agents/skills/claude", "expected_absent",
-                         "Codex is not enabled"))
-    elif link.is_symlink():
-        if (link / "SKILL.md").is_file():
-            out.append(check("claude_skills_link", ".agents/skills/claude", "healthy",
-                             f"→ {os.readlink(link)}"))
+    for skill_name in CLAUDE_SKILL_NAMES:
+        rel = f".agents/skills/{skill_name}"
+        link = ROOT / rel
+        cid = f"claude_skills_link:{skill_name}"
+        if "codex" not in enabled:
+            out.append(check(cid, rel, "expected_absent", "Codex is not enabled"))
+        elif link.is_symlink():
+            if (link / "SKILL.md").is_file():
+                out.append(check(cid, rel, "healthy", f"→ {os.readlink(link)}"))
+            else:
+                out.append(check(cid, rel, "issue", "symlink broken",
+                                 auto=[f"bash {script('bridge_skills.sh')}"]))
+        elif link.is_dir():
+            out.append(check(cid, rel, "manual",
+                             "user-owned directory blocks this cc-suite $claude choice",
+                             manual=f"rename {rel} if cc-suite should own this picker entry, "
+                                    "then run bridge_skills.sh"))
         else:
-            out.append(check("claude_skills_link", ".agents/skills/claude", "issue",
-                             "symlink broken", auto=[f"bash {script('bridge_skills.sh')}"]))
-    elif link.is_dir():
-        out.append(check("claude_skills_link", ".agents/skills/claude", "manual",
-                         "user-owned directory blocks the cc-suite $claude skill",
-                         manual="rename the directory if you want cc-suite to own the $claude name, "
-                                "then run bridge_skills.sh"))
-    else:
-        out.append(check("claude_skills_link", ".agents/skills/claude", "issue",
-                         "missing — $claude skill not exposed as an immediate scan child",
-                         auto=[f"bash {script('bridge_skills.sh')}"]))
+            out.append(check(cid, rel, "issue",
+                             "missing — pre-send $claude choice is not exposed",
+                             auto=[f"bash {script('bridge_skills.sh')}"]))
 
     agents_link = ROOT / ".agents/skills"
     # Every bridged tool except Claude itself reads `.agents/skills` — Codex,
@@ -248,23 +256,28 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
                 out.append(check("codex_dispatcher", "/codex dispatcher", "info",
                                  "generated command was edited; preserved as user-owned"))
 
-    skill = ROOT / ".agents/skills/claude/SKILL.md"
-    policy = ROOT / ".agents/skills/claude/agents/openai.yaml"
-    skill_text = _read(skill)
-    policy_text = _read(policy)
-    if skill_text is None:
+    missing = []
+    unsafe = []
+    for skill_name in CLAUDE_SKILL_NAMES:
+        skill_text = _read(ROOT / ".agents/skills" / skill_name / "SKILL.md")
+        policy_text = _read(ROOT / ".agents/skills" / skill_name / "agents/openai.yaml")
+        if skill_text is None:
+            missing.append(skill_name)
+        elif not policy_text or not re.search(
+            r"allow_implicit_invocation:\s*false", policy_text
+        ):
+            unsafe.append(skill_name)
+    if missing:
         out.append(check("claude_dispatcher", "$claude skill", "issue",
-                         "not visible through .agents/skills",
+                         f"picker choices not visible: {', '.join(missing)}",
                          auto=[f"bash {script('bridge_skills.sh')}"]))
-    elif not policy_text or not re.search(
-        r"allow_implicit_invocation:\s*false", policy_text
-    ):
+    elif unsafe:
         out.append(check("claude_dispatcher", "$claude skill", "issue",
-                         "explicit-invocation guard is missing",
+                         f"explicit-invocation guard missing: {', '.join(unsafe)}",
                          auto=[f"bash {script('bridge_skills.sh')}"]))
     else:
         out.append(check("claude_dispatcher", "$claude skill", "healthy",
-                         "visible and explicit-only"))
+                         "five pre-send configuration choices visible and explicit-only"))
     return out
 
 
@@ -296,7 +309,7 @@ def check_stale_nested_symlinks() -> list[dict]:
 
 
 def check_cache_freshness() -> dict:
-    link = ROOT / ".agents/skills/claude"
+    link = ROOT / ".agents/skills" / CLAUDE_SKILL_NAMES[0]
     if not link.is_symlink():
         return check("cache_freshness", "plugin cache", "skipped", "no skills symlink to compare")
     target = os.readlink(link)

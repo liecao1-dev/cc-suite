@@ -10,11 +10,14 @@ description: "Project instructions for the simple Claude Code ↔ Codex dispatch
 ## Product contract
 
 - Claude → Codex uses `/codex <plain-language task>`.
-- Codex → Claude uses `$claude <plain-language task>`.
-- Every dispatch requires an explicit configuration choice. Order choices as
-  recent configuration, default configuration, then remaining models.
+- Codex → Claude starts by typing `$claude`, choosing a configuration candidate
+  in the composer, appending the plain-language task, and sending once.
+- Every dispatch requires an explicit pre-send configuration choice. Keep the
+  candidates numbered as recent configuration, default configuration, then
+  remaining models so the composer order is stable.
 - Recent means the last selected `model + effort + access` tuple, never the
-  newest released model. Merge recent/default duplicates.
+  newest released model. On a project's first use, the recent entry visibly
+  resolves to the default tuple.
 - Routing is non-sticky. Every new task or follow-up must repeat the target
   prefix. Configuration answers belong to the pending dispatch.
 - Never silently fall back to the host model when a target is unavailable.
@@ -36,7 +39,8 @@ description: "Project instructions for the simple Claude Code ↔ Codex dispatch
 - `commands/codex.md` is the canonical Claude-side dispatcher.
 - `scripts/install_dispatchers.sh` renders the literal project `/codex` shim and
   uses a content hash to distinguish generated files from user edits.
-- `skills/cc-suite/claude/` is the explicit Codex-side `$claude` dispatcher.
+- `skills/cc-suite/claude-*/` contains the ordered, explicit Codex-side
+  `$claude` configuration candidates.
 - `scripts/dispatch-config.mjs` discovers capabilities, orders chooser profiles,
   validates choices, and stores per-project MRU state.
 - `scripts/lib/dispatch-config.mjs` contains the pure ordering/validation logic.
@@ -57,11 +61,12 @@ npm test
 bash tests/integration.sh
 ```
 
-Validate the `$claude` skill separately:
+Validate every `$claude` configuration skill separately:
 
 ```bash
-python3 <skill-creator-dir>/scripts/quick_validate.py \
-  skills/cc-suite/claude
+for skill in skills/cc-suite/claude-*; do
+  python3 <skill-creator-dir>/scripts/quick_validate.py "$skill"
+done
 ```
 
 After setup changes, initialize a temporary project twice and confirm:

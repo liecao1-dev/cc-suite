@@ -9,10 +9,10 @@ allowed-tools:
 本版本只建立两条日常入口：
 
 - Claude 里用 `/codex <任务>` 派遣给 Codex。
-- Codex 里用 `$claude <任务>` 派遣给 Claude。
+- Codex 里先输入 `$claude`，在发送前选配置、追加任务，再派遣给 Claude。
 
-模型配置不在初始化时锁定。每次派遣都会重新显示选择器，并按照“最近配置、
-默认配置、其他模型”的顺序让用户手动选择。
+模型配置不在初始化时锁定。每次派遣都从输入框候选中重新选择，并按照“最近
+配置、默认配置、其他模型”的顺序排列；发送后不再要求回复编号。
 
 ## 1. 本地依赖检查
 
@@ -80,7 +80,9 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/status.sh"
 
 ```bash
 grep -q '^<!-- cc-suite-dispatcher: codex sha256=' .claude/commands/codex.md
-test -f .agents/skills/claude/SKILL.md
+for skill in claude-1-recent claude-2-default claude-3-sonnet claude-4-opus claude-5-haiku; do
+  test -f ".agents/skills/${skill}/SKILL.md"
+done
 grep -q 'cc-suite-claude-mcp' .codex/config.toml
 ```
 
@@ -96,9 +98,9 @@ grep -q 'cc-suite-claude-mcp' .codex/config.toml
 cc-suite 已完成 Claude ↔ Codex 初始化。
 
 Claude：/codex <用大白话写任务>
-Codex：$claude <用大白话写任务>
+Codex：输入 $claude → 选配置 → 追加大白话任务 → 回车
 
-每次都会重新选配置；最近配置只排第一，不会自动使用。
+每次都会重新选配置；发送后不再回复编号。
 请分别新开一个 Claude 与 Codex 对话，让新命令和 skill 被重新扫描。
 ```
 

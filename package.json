@@ -1,9 +1,9 @@
 {
   "name": "cc-suite",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "type": "module",
-  "description": "Simple explicit Claude Code and Codex delegation with manual per-dispatch model configuration",
+  "description": "Simple explicit Claude Code and Codex delegation with pre-send model configuration",
   "license": "ISC",
   "engines": {
     "node": ">=18.18.0"

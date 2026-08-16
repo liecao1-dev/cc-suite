@@ -10,13 +10,17 @@ const PLUGIN_ROOT = path.resolve(
 const SKILLS_DIR = path.join(PLUGIN_ROOT, "skills", "cc-suite");
 
 // Skills that either hand work back to Claude Code or mutate project state.
-// bridge_skills.sh exposes the `$claude` dispatcher directly at
-// .agents/skills/claude, so a Codex session that Claude itself spawned can see
-// it. Left implicitly invocable, `$claude` can route work straight back to its
+// bridge_skills.sh exposes the `$claude` picker entries directly under
+// .agents/skills/claude-*, so a Codex session that Claude itself spawned can see
+// them. Left implicitly invocable, a picker entry can route work straight back to its
 // author and collapse independent judgment. Dispatch skills must remain
 // explicit-only.
 const EXPLICIT_ONLY = [
-  "claude",
+  "claude-1-recent",
+  "claude-2-default",
+  "claude-3-sonnet",
+  "claude-4-opus",
+  "claude-5-haiku",
 ];
 
 const IMPLICIT_ALLOWED = [];
@@ -85,8 +89,8 @@ test("the /codex prompt forbids delegating the task back to Claude", () => {
   );
   assert.match(
     command,
-    /Do not invoke the \$claude workspace skill/i,
-    "The preamble must tell Codex not to invoke $claude"
+    /Do not invoke any \$claude-\* workspace skill/i,
+    "The preamble must tell Codex not to invoke a $claude configuration skill"
   );
   assert.match(
     command,

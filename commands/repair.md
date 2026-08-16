@@ -27,7 +27,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/status.sh"
 
 - `.claude/commands/codex.md` 是 cc-suite 生成的 `/codex`，或用户同名文件被保留
   且 `/cc-suite:codex` 可用；
-- `.agents/skills/claude/SKILL.md` 可读；
+- `.agents/skills/claude-{1..5}-*/SKILL.md` 的 5 个配置入口均可读；
 - `.codex/config.toml` 含 `cc-suite-claude-mcp`；
 - `codex` CLI 可用。
 

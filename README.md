@@ -7,10 +7,7 @@ cc-suite 3 把 Claude Code 与 Codex 之间的协作收成两个入口：
 /codex 帮我找出登录流程偶尔卡住的原因
 
 # 在 Codex 里
-$claude 帮我把这份 README 改得让新手能直接照着安装
-
-# 也可以先打开配置选择，选完后再输入任务
-$claude
+输入 $claude → 在候选菜单选 Claude 配置 → 继续写任务 → 回车一次
 ```
 
 任务直接用大白话写。没有 `implement`、`audit`、`review-plan`、
@@ -18,17 +15,19 @@ $claude
 
 ## 核心规则
 
-每次派遣都会先让用户手动选择完整配置：
+每次派遣都让用户手动选择完整配置，顺序统一为：
 
 1. 最近一次用过的配置；
 2. 默认配置；
 3. 其他当前可用模型。
 
 “最近配置”是上一次选择的 `模型 + 推理强度 + 权限`，不是最近发布的模型。
-最近与默认相同时只显示一次，并标注“最近且默认”。任何配置都不会被自动采用。
+Claude → Codex 在发送命令后弹出选择；Codex → Claude 则在输入框里先显示 5 个
+配置候选，选好后才发送。后者为了保持菜单位置固定，会始终保留“最近”和
+“默认”两个入口；项目第一次没有最近记录时，“最近”入口明确采用默认配置。
 
 路由是非黏性的：完成一次任务后，下一次任务或追问仍要重新写 `/codex` 或
-`$claude`。配置选择阶段的回答属于尚未发出的这一次任务，不需要重复前缀。
+重新输入 `$claude` 并选择配置。
 
 目标模型不可用时会明确失败，不会让当前模型冒充目标模型代答。
 
@@ -58,22 +57,32 @@ $claude
 
 ### Codex → Claude
 
-日常写法：
+日常操作只发送一次：
 
 ```text
-$claude
-$claude <任务>
+1. 在输入框键入 $claude（先不要发送）
+2. 选择 Claude 1｜最近配置、Claude 2｜默认配置、Sonnet、Opus 或 Haiku
+3. 在选中的 skill 后面继续写任务，然后回车发送
 ```
 
-`$claude` 是显式 Codex skill，不会被自然语言隐式触发。它通过项目锁定的
-`claude-octopus` MCP 服务调用 Claude Code。只发送 `$claude` 并回车时，会先
-显示配置选择；选完后再询问本次任务。若一开始就附带任务，也仍然先选配置。
-初始化会建立真实的 `.agents/skills/` 扫描目录，并把它直接暴露为
-`.agents/skills/claude/SKILL.md`，供 Codex 扫描。
+`$claude` 是 5 个显式 Codex skill 的共同搜索前缀，不会被自然语言隐式触发。
+选择配置发生在消息发送前；发送后直接通过项目锁定的 `claude-octopus` MCP
+服务调用 Claude Code，不再打印编号列表，也不要求再回复一次。若只选 skill
+而没写任务就发送，才会询问缺少的任务。
+
+初始化会建立真实的 `.agents/skills/` 扫描目录，并把 5 个配置 skill 直接暴露
+为 `.agents/skills/claude-*`。编号用于稳定保持“最近、默认、其他模型”的顺序：
+
+- `Claude 1｜派遣｜最近配置`：上次的完整 `model + effort + permissionMode`；
+  本项目第一次使用时明确采用默认配置；
+- `Claude 2｜派遣｜默认配置`：`default · medium · permission=default`；
+- `Claude 3｜派遣｜Sonnet`：`sonnet · medium · permission=default`；
+- `Claude 4｜派遣｜Opus`：`opus · medium · permission=default`；
+- `Claude 5｜派遣｜Haiku`：`haiku · medium · permission=default`。
 
 若本机还安装了全局 `$claude-workflow-sync`，输入 `$claude` 时 Codex 会同时
-显示 `Claude 派遣` 与 `Claude 工作流同步`。用方向键选择本次需要的入口再回车；
-前者派遣任务并选择模型配置，后者同步 Claude Desktop 对话。
+显示上述 5 个 `Claude …｜派遣｜…` 入口与 `Claude 工作流同步`。两类名称明确
+区分：前者派遣任务，后者同步 Claude Desktop 对话。
 
 配置字段：
 
@@ -114,12 +123,13 @@ claude --plugin-dir /absolute/path/to/cc-suite
 
 ## 可见命令
 
-日常只有一个 Claude 派遣命令和一个 Codex 派遣 skill。另保留少量维护命令：
+日常只有 `/codex` 和 `$claude` 两个模型名入口；`$claude` 的配置作为发送前候选
+显示。另保留少量维护命令：
 
 | 入口 | 用途 |
 |---|---|
 | `/codex <任务>` | 派遣给 Codex |
-| `$claude` 或 `$claude <任务>` | 先选配置，再派遣给 Claude |
+| 输入 `$claude`，选配置后追加任务 | 发送一次，直接派遣给 Claude |
 | `/cc-suite:init` | 初始化双向通道 |
 | `/cc-suite:status` | 查看桥接和 job 状态 |
 | `/cc-suite:diagnose` | 诊断配置问题 |
@@ -153,9 +163,10 @@ npm test
 bash tests/integration.sh
 ```
 
-新 skill 还应通过：
+5 个配置 skill 还应分别通过：
 
 ```bash
-python3 <skill-creator-dir>/scripts/quick_validate.py \
-  skills/cc-suite/claude
+for skill in skills/cc-suite/claude-*; do
+  python3 <skill-creator-dir>/scripts/quick_validate.py "$skill"
+done
 ```

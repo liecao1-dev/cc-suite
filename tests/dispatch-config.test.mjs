@@ -158,3 +158,82 @@ test("the CLI merges a recent configuration that exactly matches the default", (
     cleanupDir(workspace);
   }
 });
+
+test("the CLI resolves fixed Claude picker profiles before dispatch", () => {
+  const workspace = makeTempDir();
+  try {
+    const sonnet = runConfig(workspace, [
+      "resolve",
+      "--target", "claude",
+      "--profile", "model:sonnet",
+    ]);
+    assert.equal(sonnet.status, "ok");
+    assert.deepEqual(sonnet.config, {
+      model: "sonnet",
+      effort: "medium",
+      access: "default",
+    });
+    assert.equal(sonnet.usedInitialDefault, false);
+  } finally {
+    cleanupDir(workspace);
+  }
+});
+
+test("the recent picker profile uses the MRU and has an explicit first-use fallback", () => {
+  const workspace = makeTempDir();
+  try {
+    const firstUse = runConfig(workspace, [
+      "resolve",
+      "--target", "claude",
+      "--profile", "recent",
+    ]);
+    assert.equal(firstUse.status, "ok");
+    assert.equal(firstUse.resolvedFrom, "default");
+    assert.equal(firstUse.usedInitialDefault, true);
+    assert.deepEqual(firstUse.config, {
+      model: "default",
+      effort: "medium",
+      access: "default",
+    });
+
+    runConfig(workspace, [
+      "record",
+      "--target", "claude",
+      "--model", "opus",
+      "--effort", "high",
+      "--access", "plan",
+    ]);
+    const recent = runConfig(workspace, [
+      "resolve",
+      "--target", "claude",
+      "--profile", "recent",
+    ]);
+    assert.equal(recent.status, "ok");
+    assert.equal(recent.resolvedFrom, "recent");
+    assert.equal(recent.usedInitialDefault, false);
+    assert.deepEqual(recent.config, {
+      model: "opus",
+      effort: "high",
+      access: "plan",
+    });
+  } finally {
+    cleanupDir(workspace);
+  }
+});
+
+test("the CLI rejects an unknown picker profile without recording state", () => {
+  const workspace = makeTempDir();
+  try {
+    const resolved = runConfig(workspace, [
+      "resolve",
+      "--target", "claude",
+      "--profile", "model:unknown",
+    ]);
+    assert.equal(resolved.status, "error");
+    assert.equal(resolved.errorCode, "profile_resolution_failed");
+    const recent = runConfig(workspace, ["recent", "--target", "claude"]);
+    assert.equal(recent.recent, null);
+  } finally {
+    cleanupDir(workspace);
+  }
+});

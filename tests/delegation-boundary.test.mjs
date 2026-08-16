@@ -21,13 +21,10 @@ function readScript(name) {
 
 test("the boundary names every skill that delegates back to Claude", () => {
   for (const skill of DELEGATING_SKILLS) {
-    assert.ok(
-      DELEGATION_BOUNDARY.includes(skill),
-      `Boundary text should name the ${skill} skill`
-    );
+    assert.match(skill, /^claude-/);
   }
   assert.ok(
-    /do not activate or invoke the \$claude workspace skill/i.test(DELEGATION_BOUNDARY),
+    /do not activate or invoke any \$claude-\* workspace skill/i.test(DELEGATION_BOUNDARY),
     "Boundary should forbid both activation and invocation"
   );
 });
@@ -104,10 +101,8 @@ test("the /codex prompt keeps the same promise as the shared boundary", () => {
       `commands/codex.md is missing the invariant sentence: ${sentence}`
     );
   }
-  for (const skill of DELEGATING_SKILLS) {
-    assert.ok(
-      command.includes(`$${skill}`),
-      `commands/codex.md should name $${skill} in the delegation boundary`
-    );
-  }
+  assert.ok(
+    command.includes("$claude-*"),
+    "commands/codex.md should forbid every $claude configuration skill"
+  );
 });

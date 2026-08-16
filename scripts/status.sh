@@ -4,6 +4,13 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_SKILL_NAMES=(
+  claude-1-recent
+  claude-2-default
+  claude-3-sonnet
+  claude-4-opus
+  claude-5-haiku
+)
 
 mark() {
   # $1: label  $2: state (ok|miss|warn)  $3: detail
@@ -81,18 +88,21 @@ else
   mark ".agents/skills" miss "→ run /cc-suite:repair"
 fi
 
-# The explicit dispatcher must be an immediate child of the scan directory.
-if [ -L .agents/skills/claude ]; then
-  if [ -f .agents/skills/claude/SKILL.md ]; then
-    mark ".agents/skills/claude" ok '→ cc-suite $claude dispatcher'
+# Each pre-send configuration must be an immediate child of the scan directory.
+for _skill_name in "${CLAUDE_SKILL_NAMES[@]}"; do
+  _skill_path=".agents/skills/${_skill_name}"
+  if [ -L "$_skill_path" ]; then
+    if [ -f "${_skill_path}/SKILL.md" ]; then
+      mark "$_skill_path" ok '→ $claude pre-send choice'
+    else
+      mark "$_skill_path" warn "symlink broken — run /cc-suite:repair"
+    fi
+  elif [ -e "$_skill_path" ]; then
+    mark "$_skill_path" warn 'user-owned path blocks this $claude choice'
   else
-    mark ".agents/skills/claude" warn "symlink broken — run /cc-suite:repair"
+    mark "$_skill_path" miss '$claude choice not exposed — run /cc-suite:repair'
   fi
-elif [ -e .agents/skills/claude ]; then
-  mark ".agents/skills/claude" warn 'user-owned path blocks the cc-suite $claude dispatcher'
-else
-  mark ".agents/skills/claude" miss '$claude dispatcher not exposed — run /cc-suite:repair'
-fi
+done
 
 # Literal daily dispatcher installed by init.sh. A user-owned collision is a
 # warning rather than something cc-suite overwrites.

@@ -147,7 +147,9 @@ assert_file ".codex/prompts/.gitkeep"
 assert_file ".codex/config.toml"
 assert_file ".claude/commands/codex.md"
 assert_contains ".claude/commands/codex.md" "cc-suite-dispatcher: codex sha256="
-assert_file ".agents/skills/claude/SKILL.md"
+for _claude_skill in claude-1-recent claude-2-default claude-3-sonnet claude-4-opus claude-5-haiku; do
+  assert_file ".agents/skills/${_claude_skill}/SKILL.md"
+done
 assert_file ".gitignore"
 assert_contains ".gitignore" "# >>> cc-suite >>>"
 assert_contains ".gitignore" "# <<< cc-suite <<<"
@@ -284,9 +286,9 @@ assert_count "# >>> cc-suite >>>" ".gitignore" 1  # no duplicate blocks
 cleanup
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# T08  bridge_skills.sh — creates a real Codex scan dir with direct $claude
+# T08  bridge_skills.sh — creates a real Codex scan dir with $claude choices
 # ═══════════════════════════════════════════════════════════════════════════════
-section 'T08: bridge_skills.sh — creates direct $claude skill link'
+section 'T08: bridge_skills.sh — creates pre-send $claude choice links'
 make_tmp
 
 mkdir -p .agents/skills/my-skill
@@ -297,8 +299,11 @@ assert_exit0 bash "$SCRIPTS/bridge_skills.sh"
 assert_dir           ".agents/skills"
 assert_no_symlink    ".agents/skills"
 assert_file          ".agents/skills/my-skill/SKILL.md"
-assert_symlink       ".agents/skills/claude"
-assert_file          ".agents/skills/claude/SKILL.md"
+for _claude_skill in claude-1-recent claude-2-default claude-3-sonnet claude-4-opus claude-5-haiku; do
+  assert_symlink ".agents/skills/${_claude_skill}"
+  assert_file ".agents/skills/${_claude_skill}/SKILL.md"
+done
+assert_no_symlink ".agents/skills/claude"
 
 cleanup
 
@@ -313,8 +318,10 @@ assert_exit0 bash "$SCRIPTS/bridge_skills.sh"
 assert_exit0 bash "$SCRIPTS/bridge_skills.sh"
 assert_dir     ".agents/skills"
 assert_no_symlink ".agents/skills"
-assert_symlink ".agents/skills/claude"
-assert_file    ".agents/skills/claude/SKILL.md"
+for _claude_skill in claude-1-recent claude-2-default claude-3-sonnet claude-4-opus claude-5-haiku; do
+  assert_symlink ".agents/skills/${_claude_skill}"
+  assert_file ".agents/skills/${_claude_skill}/SKILL.md"
+done
 
 cleanup
 
@@ -1022,7 +1029,9 @@ assert_file     "CLAUDE.md"
 assert_contains "CLAUDE.md" "# My Real Project"    # original content restored
 assert_contains "CLAUDE.md" "Do great things."
 assert_no_dir     ".agents/skills"
-assert_no_symlink ".agents/skills/claude"
+for _claude_skill in claude-1-recent claude-2-default claude-3-sonnet claude-4-opus claude-5-haiku; do
+  assert_no_symlink ".agents/skills/${_claude_skill}"
+done
 # .mcp.json and .claude/ untouched
 assert_file ".mcp.json"
 assert_file ".claude/settings.json"
