@@ -68,39 +68,30 @@ if [ -f GEMINI.md ]; then
   fi
 fi
 
-# .agents/skills symlink. Not gated on the tool selection: bridge_skills.sh
-# creates it unconditionally, and Grok Build, opencode and Kimi CLI read it
-# too — not just Codex and agy (see README, "What each tool picks up on its own").
+# .agents/skills must be a real scan directory. Codex follows individual skill
+# symlinks inside it, but does not reliably discover skills through a symlinked
+# scan root.
 if [ -L .agents/skills ]; then
   _target="$(readlink .agents/skills)"
-  if [ "$_target" = "../.claude/skills" ]; then
-    if [ -d .agents/skills ]; then
-      _count="$(find -L .agents/skills/ -maxdepth 2 -mindepth 2 -type d 2>/dev/null | wc -l | tr -d ' ')"
-      mark ".agents/skills" ok "→ ../.claude/skills (${_count} skills)"
-    else
-      mark ".agents/skills" warn "→ ../.claude/skills (TARGET MISSING — broken symlink)"
-    fi
-  else
-    mark ".agents/skills" warn "→ ${_target} (unexpected target)"
-  fi
+  mark ".agents/skills" warn "symlink → ${_target} (run /cc-suite:repair to migrate)"
 elif [ -d .agents/skills ]; then
-  mark ".agents/skills" warn "real directory (not symlink)"
+  _count="$(find -L .agents/skills/ -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+  mark ".agents/skills" ok "real scan directory (${_count} skills)"
 else
   mark ".agents/skills" miss "→ run /cc-suite:repair"
 fi
 
-# .claude/skills/cc-suite symlink (plugin skills exposed to Codex)
-if [ -L .claude/skills/cc-suite ]; then
-  if [ -d .claude/skills/cc-suite ]; then
-    _skill_count="$(find .claude/skills/cc-suite/ -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
-    mark ".claude/skills/cc-suite" ok "→ plugin skills (${_skill_count} skills visible to Codex)"
+# The explicit dispatcher must be an immediate child of the scan directory.
+if [ -L .agents/skills/claude ]; then
+  if [ -f .agents/skills/claude/SKILL.md ]; then
+    mark ".agents/skills/claude" ok '→ cc-suite $claude dispatcher'
   else
-    mark ".claude/skills/cc-suite" warn "symlink broken — run /cc-suite:repair"
+    mark ".agents/skills/claude" warn "symlink broken — run /cc-suite:repair"
   fi
-elif [ -d .claude/skills/cc-suite ]; then
-  mark ".claude/skills/cc-suite" warn "real directory (not symlink) — Codex may see stale skills"
+elif [ -e .agents/skills/claude ]; then
+  mark ".agents/skills/claude" warn 'user-owned path blocks the cc-suite $claude dispatcher'
 else
-  mark ".claude/skills/cc-suite" miss "plugin skills not exposed — run /cc-suite:repair"
+  mark ".agents/skills/claude" miss '$claude dispatcher not exposed — run /cc-suite:repair'
 fi
 
 # Literal daily dispatcher installed by init.sh. A user-owned collision is a

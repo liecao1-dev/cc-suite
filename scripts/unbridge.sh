@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# cc-suite: tear down the bridge artifacts. Safe: never deletes .claude/ or its contents.
+# cc-suite: tear down bridge artifacts. Safe: only removes proven cc-suite-owned
+# links/files and never removes user-authored .claude content.
 
 set -euo pipefail
 
@@ -73,7 +74,7 @@ context; Codex and `agy` both read `AGENTS.md` natively.
 ## Project Structure
 
 - `.claude/` — Claude Code skills, agents, rules, hooks, commands
-- `.agents/skills/` — symlink to `.claude/skills/` (Codex skill scan path)
+- `.agents/skills/` — Codex skill scan directory; cc-suite links `$claude` here
 - `.codex/prompts/` — Codex slash-command prompts
 - `.codex/hooks.json` / `.codex/config.toml` — Codex hooks/config (optional)
 - `.mcp.json` — MCP server registrations (Claude Code + Codex)
@@ -361,10 +362,57 @@ if ! python3 "${SCRIPT_DIR}/bridge_tools.py" --unbridge; then
   UNBRIDGE_FAILED=1
 fi
 
-# .agents/skills symlink only — never the .claude/skills/ target, and never a
-# link the user pointed elsewhere (bridge_skills.sh refuses to overwrite those,
-# so unbridge must not delete them either).
+# Remove generated dispatchers and proven cc-suite-owned skill links. Never
+# delete a real user skill or a symlink pointing somewhere unrelated.
 bash "${SCRIPT_DIR}/uninstall_dispatchers.sh"
+
+if [ -L .agents/skills/claude ]; then
+  _agents_claude_target="$(readlink .agents/skills/claude)"
+  case "$_agents_claude_target" in
+    */skills/cc-suite/claude|../../.claude/skills/claude)
+      rm .agents/skills/claude
+      ok "removed .agents/skills/claude symlink"
+      ;;
+    *)
+      skip ".agents/skills/claude points to ${_agents_claude_target} — not cc-suite-owned, left alone"
+      ;;
+  esac
+else
+  skip ".agents/skills/claude not a symlink"
+fi
+
+# Direct skill links are required for Codex discovery. Remove only links whose
+# target shape proves they came from cc-suite; preserve real paths and unrelated
+# user symlinks with the same name.
+if [ -L .claude/skills/claude ]; then
+  _claude_skill_target="$(readlink .claude/skills/claude)"
+  case "$_claude_skill_target" in
+    */skills/cc-suite/claude)
+      rm .claude/skills/claude
+      ok "removed .claude/skills/claude symlink"
+      ;;
+    *)
+      skip ".claude/skills/claude points to ${_claude_skill_target} — not cc-suite-owned, left alone"
+      ;;
+  esac
+else
+  skip ".claude/skills/claude not a symlink"
+fi
+
+# Clean the obsolete nested link created by pre-fix versions, using the same
+# target-shape proof before removal.
+if [ -L .claude/skills/cc-suite ]; then
+  _legacy_skills_target="$(readlink .claude/skills/cc-suite)"
+  case "$_legacy_skills_target" in
+    */skills/cc-suite)
+      rm .claude/skills/cc-suite
+      ok "removed obsolete .claude/skills/cc-suite symlink"
+      ;;
+    *)
+      skip ".claude/skills/cc-suite points to ${_legacy_skills_target} — not cc-suite-owned, left alone"
+      ;;
+  esac
+fi
 
 if [ -L .agents/skills ]; then
   _skills_target="$(readlink .agents/skills)"
@@ -375,8 +423,15 @@ if [ -L .agents/skills ]; then
   else
     skip ".agents/skills points to ${_skills_target} — not cc-suite-owned, left alone"
   fi
+elif [ -d .agents/skills ]; then
+  if rmdir .agents/skills 2>/dev/null; then
+    ok "removed empty .agents/skills/"
+    rmdir .agents 2>/dev/null && ok "removed empty .agents/" || true
+  else
+    skip ".agents/skills contains user-owned content — directory left alone"
+  fi
 else
-  skip ".agents/skills not a symlink"
+  skip ".agents/skills missing"
 fi
 
 # .codex/prompts — only if empty of real content.

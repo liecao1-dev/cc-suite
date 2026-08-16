@@ -1,5 +1,5 @@
 interface:
-  display_name: "派遣给 Claude"
+  display_name: "Claude 派遣"
   short_description: "每次先手动选择 Claude 模型配置，再输入或派遣本次任务"
   default_prompt: "Use $claude to let me choose a Claude configuration first, then ask for my task."
 dependencies:

@@ -80,7 +80,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/status.sh"
 
 ```bash
 grep -q '^<!-- cc-suite-dispatcher: codex sha256=' .claude/commands/codex.md
-test -f .agents/skills/cc-suite/claude/SKILL.md
+test -f .agents/skills/claude/SKILL.md
 grep -q 'cc-suite-claude-mcp' .codex/config.toml
 ```
 

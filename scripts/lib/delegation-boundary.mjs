@@ -1,11 +1,9 @@
 // delegation-boundary.mjs — Stop a delegated agent handing the work back.
 //
-// bridge_skills.sh points .agents/skills at ../.claude/skills, and every agent
-// cc-suite delegates to (Codex, Antigravity, Grok, and the other AGENTS.md
-// readers) loads workspace skills from there. That tree contains cc-suite's
-// explicit `$claude` dispatcher. A Codex session that Claude itself spawned can
-// therefore route the request straight back to its author. The independent
-// judgment collapses into self-review.
+// bridge_skills.sh exposes the explicit `$claude` dispatcher directly at
+// .agents/skills/claude. A Codex session that Claude itself spawned can see it
+// and could route the request straight back to its author. The independent
+// judgment would then collapse into self-review.
 //
 // Two levers close this, and each covers what the other cannot:
 //

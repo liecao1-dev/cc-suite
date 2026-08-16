@@ -10,10 +10,10 @@ const PLUGIN_ROOT = path.resolve(
 const SKILLS_DIR = path.join(PLUGIN_ROOT, "skills", "cc-suite");
 
 // Skills that either hand work back to Claude Code or mutate project state.
-// bridge_skills.sh exposes every skill here to Codex through
-// .agents/skills -> ../.claude/skills, so a Codex session that Claude itself
-// spawned can see them. Left implicitly invocable, `$claude` can route work
-// straight back to its author and collapse independent judgment. These must be
+// bridge_skills.sh exposes the `$claude` dispatcher directly at
+// .agents/skills/claude, so a Codex session that Claude itself spawned can see
+// it. Left implicitly invocable, `$claude` can route work straight back to its
+// author and collapse independent judgment. Dispatch skills must remain
 // explicit-only.
 const EXPLICIT_ONLY = [
   "claude",

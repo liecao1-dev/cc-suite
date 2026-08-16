@@ -119,7 +119,7 @@ This keeps Claude Code and Codex CLI on the same context; Codex reads
 ## Project Structure
 
 - `.claude/` — Claude Code skills, agents, rules, hooks, commands
-- `.agents/skills/` — symlink to `.claude/skills/` (Codex skill scan path)
+- `.agents/skills/` — Codex skill scan directory; cc-suite links `$claude` here
 - `.codex/prompts/` — Codex slash-command prompts
 - `.codex/hooks.json` / `.codex/config.toml` — Codex hooks/config (optional)
 - `.mcp.json` — project MCP server registrations

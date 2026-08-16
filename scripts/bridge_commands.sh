@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # cc-suite: expose .claude/commands/*.md as Claude skills under .claude/skills/cmd-<name>/.
 #
-# Skills are written to .claude/skills/ (Claude's native path), not .agents/skills/.
-# The .agents/skills → .claude/skills symlink created by bridge_skills.sh makes them
-# visible to Codex and Antigravity CLI (`agy`) automatically. Both tools read
-# workspace skills from .agents/skills/.
+# Skills are written only to .claude/skills/ (Claude's native path). The simple
+# 3.x dispatcher no longer symlinks the whole scan root into .agents/skills/;
+# only the explicit $claude dispatcher is exposed to Codex there.
 #
 # Each generated skill sets allow_implicit_invocation=false so users invoke
 # with $cmd-<name> in Codex rather than having it fire automatically.
@@ -276,8 +275,8 @@ def main() -> None:
         )
 
     if count > 0:
-        print(f"\n  Skills written to .claude/skills/ and visible to Codex via .agents/skills symlink.")
-        print(f"  Invoke in Codex with $cmd-<name>  (e.g. $cmd-{last_name})")
+        print(f"\n  Skills written to .claude/skills/ for Claude Code.")
+        print(f"  Codex simple-dispatch mode exposes only $claude, not $cmd-{last_name}.")
 
 
 if __name__ == "__main__":

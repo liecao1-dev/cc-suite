@@ -15,7 +15,7 @@ Ask the user via AskUserQuestion before doing anything. List exactly what will b
 
 - `AGENTS.md` (content will be restored to `CLAUDE.md` automatically — no manual copy needed)
 - Legacy `GEMINI.md` — only if it contains nothing but `@AGENTS.md` (bare import); hybrid files are left alone
-- `.agents/skills` symlink (not the `.claude/skills/` target it points to)
+- cc-suite 管理的 `.agents/skills/claude` symlink；仅在空目录时移除 `.agents/skills/`
 - cc-suite 生成且从未被用户编辑的 `.claude/commands/codex.md`；用户同名或已编辑文件保留
 - `.cc-suite/runtime/` 中 cc-suite 管理的最近配置状态（同名符号链接保留）
 - `.agents/mcp_config.json` only if it carries cc-suite provenance; user-managed entries are preserved

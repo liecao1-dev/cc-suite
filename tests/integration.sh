@@ -147,7 +147,7 @@ assert_file ".codex/prompts/.gitkeep"
 assert_file ".codex/config.toml"
 assert_file ".claude/commands/codex.md"
 assert_contains ".claude/commands/codex.md" "cc-suite-dispatcher: codex sha256="
-assert_file ".agents/skills/cc-suite/claude/SKILL.md"
+assert_file ".agents/skills/claude/SKILL.md"
 assert_file ".gitignore"
 assert_contains ".gitignore" "# >>> cc-suite >>>"
 assert_contains ".gitignore" "# <<< cc-suite <<<"
@@ -284,19 +284,21 @@ assert_count "# >>> cc-suite >>>" ".gitignore" 1  # no duplicate blocks
 cleanup
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# T08  bridge_skills.sh — creates .agents/skills → .claude/skills symlink
+# T08  bridge_skills.sh — creates a real Codex scan dir with direct $claude
 # ═══════════════════════════════════════════════════════════════════════════════
-section "T08: bridge_skills.sh — creates symlink"
+section 'T08: bridge_skills.sh — creates direct $claude skill link'
 make_tmp
 
-mkdir -p .claude/skills/my-skill
-echo "# My Skill" > .claude/skills/my-skill/SKILL.md
+mkdir -p .agents/skills/my-skill
+echo "# My Skill" > .agents/skills/my-skill/SKILL.md
 
 assert_exit0 bash "$SCRIPTS/bridge_skills.sh"
 
-assert_symlink       ".agents/skills"
-assert_symlink_target ".agents/skills" "../.claude/skills"
+assert_dir           ".agents/skills"
+assert_no_symlink    ".agents/skills"
 assert_file          ".agents/skills/my-skill/SKILL.md"
+assert_symlink       ".agents/skills/claude"
+assert_file          ".agents/skills/claude/SKILL.md"
 
 cleanup
 
@@ -309,19 +311,23 @@ make_tmp
 mkdir -p .claude/skills
 assert_exit0 bash "$SCRIPTS/bridge_skills.sh"
 assert_exit0 bash "$SCRIPTS/bridge_skills.sh"
-assert_symlink ".agents/skills"
+assert_dir     ".agents/skills"
+assert_no_symlink ".agents/skills"
+assert_symlink ".agents/skills/claude"
+assert_file    ".agents/skills/claude/SKILL.md"
 
 cleanup
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# T10  bridge_skills.sh — refuses to replace a real directory
+# T10  bridge_skills.sh — refuses to replace a user root symlink
 # ═══════════════════════════════════════════════════════════════════════════════
-section "T10: bridge_skills.sh — refuses to overwrite real .agents/skills/"
+section "T10: bridge_skills.sh — preserves a user .agents/skills symlink"
 make_tmp
 
-mkdir -p .agents/skills .claude/skills
+mkdir -p .agents .user-skills
+ln -s ../.user-skills .agents/skills
 assert_exit_nonzero bash "$SCRIPTS/bridge_skills.sh"
-assert_no_symlink ".agents/skills"   # still a real dir, not converted to symlink
+assert_symlink_target ".agents/skills" "../.user-skills"
 
 cleanup
 
@@ -1001,7 +1007,8 @@ bash    "$SCRIPTS/bridge_commands.sh" >/dev/null 2>&1
 # Verify bridged state
 assert_file_content "CLAUDE.md" "@AGENTS.md"
 assert_file         "AGENTS.md"
-assert_symlink      ".agents/skills"
+assert_dir          ".agents/skills"
+assert_no_symlink   ".agents/skills"
 assert_file         ".codex/hooks.json"
 assert_contains     ".codex/config.toml" "[mcp_servers.my-mcp]"
 assert_file         ".claude/skills/cmd-lint/SKILL.md"
@@ -1014,7 +1021,8 @@ assert_no_file  "AGENTS.md"
 assert_file     "CLAUDE.md"
 assert_contains "CLAUDE.md" "# My Real Project"    # original content restored
 assert_contains "CLAUDE.md" "Do great things."
-assert_no_symlink ".agents/skills"
+assert_no_dir     ".agents/skills"
+assert_no_symlink ".agents/skills/claude"
 # .mcp.json and .claude/ untouched
 assert_file ".mcp.json"
 assert_file ".claude/settings.json"

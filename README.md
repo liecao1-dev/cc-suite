@@ -68,6 +68,12 @@ $claude <任务>
 `$claude` 是显式 Codex skill，不会被自然语言隐式触发。它通过项目锁定的
 `claude-octopus` MCP 服务调用 Claude Code。只发送 `$claude` 并回车时，会先
 显示配置选择；选完后再询问本次任务。若一开始就附带任务，也仍然先选配置。
+初始化会建立真实的 `.agents/skills/` 扫描目录，并把它直接暴露为
+`.agents/skills/claude/SKILL.md`，供 Codex 扫描。
+
+若本机还安装了全局 `$claude-workflow-sync`，输入 `$claude` 时 Codex 会同时
+显示 `Claude 派遣` 与 `Claude 工作流同步`。用方向键选择本次需要的入口再回车；
+前者派遣任务并选择模型配置，后者同步 Claude Desktop 对话。
 
 配置字段：
 

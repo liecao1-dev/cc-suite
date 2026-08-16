@@ -164,48 +164,48 @@ def check_legacy_google() -> list[dict]:
 
 def check_skills_links(enabled: list[str]) -> list[dict]:
     out = []
-    link = ROOT / ".claude/skills/cc-suite"
-    if link.is_symlink():
-        if link.exists():
-            out.append(check("claude_skills_link", ".claude/skills/cc-suite", "healthy",
+    link = ROOT / ".agents/skills/claude"
+    if "codex" not in enabled:
+        out.append(check("claude_skills_link", ".agents/skills/claude", "expected_absent",
+                         "Codex is not enabled"))
+    elif link.is_symlink():
+        if (link / "SKILL.md").is_file():
+            out.append(check("claude_skills_link", ".agents/skills/claude", "healthy",
                              f"→ {os.readlink(link)}"))
         else:
-            out.append(check("claude_skills_link", ".claude/skills/cc-suite", "issue",
+            out.append(check("claude_skills_link", ".agents/skills/claude", "issue",
                              "symlink broken", auto=[f"bash {script('bridge_skills.sh')}"]))
     elif link.is_dir():
-        out.append(check("claude_skills_link", ".claude/skills/cc-suite", "issue",
-                         "real directory, not a symlink — skills go stale on plugin updates",
-                         manual="remove the directory, then run bridge_skills.sh"))
+        out.append(check("claude_skills_link", ".agents/skills/claude", "manual",
+                         "user-owned directory blocks the cc-suite $claude skill",
+                         manual="rename the directory if you want cc-suite to own the $claude name, "
+                                "then run bridge_skills.sh"))
     else:
-        out.append(check("claude_skills_link", ".claude/skills/cc-suite", "issue",
-                         "missing — plugin skills not exposed", auto=[f"bash {script('bridge_skills.sh')}"]))
+        out.append(check("claude_skills_link", ".agents/skills/claude", "issue",
+                         "missing — $claude skill not exposed as an immediate scan child",
+                         auto=[f"bash {script('bridge_skills.sh')}"]))
 
     agents_link = ROOT / ".agents/skills"
     # Every bridged tool except Claude itself reads `.agents/skills` — Codex,
-    # agy, Grok Build, opencode and Kimi CLI (README, "What each tool picks up
-    # on its own"). Naming only Codex and Antigravity made diagnose call a
-    # broken symlink "expected absent" on a claude+opencode project, where
-    # status.sh correctly flags it. Claude alone reads .claude/skills directly,
-    # so the link really is unnecessary there.
+    # agy, Grok Build, opencode and Kimi CLI. Claude alone does not need it.
     needed = any(tool != "claude" for tool in enabled)
     if not needed:
         out.append(check("agents_skills_link", ".agents/skills", "expected_absent",
                          "no tool that reads .agents/skills is enabled"))
     elif agents_link.is_symlink():
         target = os.readlink(agents_link)
-        if target != "../.claude/skills":
+        if target == "../.claude/skills":
+            out.append(check("agents_skills_link", ".agents/skills", "issue",
+                             "obsolete root symlink prevents Codex skill discovery",
+                             auto=[f"bash {script('bridge_skills.sh')}"]))
+        else:
             out.append(check("agents_skills_link", ".agents/skills", "manual",
                              f"points at {target} — cc-suite will not overwrite a user symlink",
-                             manual="remove it and run bridge_skills.sh to restore ../.claude/skills"))
-        elif agents_link.exists():
-            out.append(check("agents_skills_link", ".agents/skills", "healthy", "→ ../.claude/skills"))
-        else:
-            out.append(check("agents_skills_link", ".agents/skills", "issue", "symlink broken",
-                             auto=[f"bash {script('bridge_skills.sh')}"]))
+                             manual="replace it with a real .agents/skills directory, then run "
+                                    "bridge_skills.sh"))
     elif agents_link.is_dir():
-        out.append(check("agents_skills_link", ".agents/skills", "manual",
-                         "real directory, not a symlink",
-                         manual="merge its content into .claude/skills, remove it, run bridge_skills.sh"))
+        out.append(check("agents_skills_link", ".agents/skills", "healthy",
+                         "real Codex skill scan directory"))
     else:
         out.append(check("agents_skills_link", ".agents/skills", "issue",
                          "missing — Codex, agy, Grok, opencode and Kimi cannot see the shared skills",
@@ -248,8 +248,8 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
                 out.append(check("codex_dispatcher", "/codex dispatcher", "info",
                                  "generated command was edited; preserved as user-owned"))
 
-    skill = ROOT / ".agents/skills/cc-suite/claude/SKILL.md"
-    policy = ROOT / ".agents/skills/cc-suite/claude/agents/openai.yaml"
+    skill = ROOT / ".agents/skills/claude/SKILL.md"
+    policy = ROOT / ".agents/skills/claude/agents/openai.yaml"
     skill_text = _read(skill)
     policy_text = _read(policy)
     if skill_text is None:
@@ -270,8 +270,7 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
 
 def check_stale_nested_symlinks() -> list[dict]:
     out = []
-    legit = {ROOT / ".claude/skills/cc-suite", ROOT / ".agents/skills",
-             ROOT / ".agents/skills/cc-suite"}
+    legit = {ROOT / ".agents/skills"}
     for base in (ROOT / ".claude/skills", ROOT / ".agents/skills"):
         if not base.is_dir():
             continue
@@ -297,7 +296,7 @@ def check_stale_nested_symlinks() -> list[dict]:
 
 
 def check_cache_freshness() -> dict:
-    link = ROOT / ".claude/skills/cc-suite"
+    link = ROOT / ".agents/skills/claude"
     if not link.is_symlink():
         return check("cache_freshness", "plugin cache", "skipped", "no skills symlink to compare")
     target = os.readlink(link)
