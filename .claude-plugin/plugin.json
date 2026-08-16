@@ -1,7 +1,7 @@
 {
   "name": "cc-suite",
   "version": "3.2.0",
-  "description": "Project-scoped Claude Code and Codex delegation: type /codex or $claude, choose a configuration before sending, then append the task.",
+  "description": "Project-scoped Claude Code and Codex delegation: submit exact /codex or $claude, choose model configuration in a pre-model keyboard picker, then send one task.",
   "author": {
     "name": "xiaolai"
   },

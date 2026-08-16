@@ -64,11 +64,7 @@ MCP_SENTINEL_OPEN = "# >>> cc-suite-mcp >>>"
 MCP_SENTINEL_CLOSE = "# <<< cc-suite-mcp <<<"
 CODEX_CANONICAL = {"type": "stdio", "command": "codex", "args": ["mcp-server"]}
 CLAUDE_SKILL_NAMES = (
-    "claude-1-recent",
-    "claude-2-default",
-    "claude-3-sonnet",
-    "claude-4-opus",
-    "claude-5-haiku",
+    "claude",
 )
 
 
@@ -229,22 +225,39 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
         out.append(check("claude_dispatcher", "$claude skill", "expected_absent",
                          "Codex is not enabled"))
         return out
-    picker_root = ROOT / ".claude/skills"
-    picker_files = list(picker_root.glob("codex-*/SKILL.md")) if picker_root.is_dir() else []
-    managed_pickers = [
-        item for item in picker_files
-        if "<!-- cc-suite-managed-codex-skill sha256=" in (_read(item) or "")
-    ]
-    if len(managed_pickers) < 2:
-        out.append(check("codex_dispatcher", "/codex pre-send choices", "issue",
-                         f"only {len(managed_pickers)} managed configuration choice(s) visible",
+    picker = ROOT / ".claude/skills/codex/SKILL.md"
+    managed_picker = "<!-- cc-suite-managed-codex-skill sha256=" in (_read(picker) or "")
+    if not managed_picker:
+        out.append(check("codex_dispatcher", "/codex dispatcher skill", "issue",
+                         "exact managed discovery skill is missing",
                          auto=[f"bash {script('install_dispatchers.sh')}"]))
     else:
-        out.append(check("codex_dispatcher", "/codex pre-send choices", "healthy",
-                         f"{len(managed_pickers)} configuration choices visible before submission"))
+        out.append(check("codex_dispatcher", "/codex dispatcher skill", "healthy",
+                         "exact discovery entry is installed"))
     if (ROOT / ".claude/commands/codex.md").is_file():
         out.append(check("codex_exact_command", "/codex exact command", "info",
-                         "a user/legacy exact command is preserved and may hide the prefix chooser"))
+                         "a user/legacy exact command is preserved and may collide with the dispatcher skill"))
+
+    hook_script = str(PLUGIN_ROOT / "scripts/dispatch-hook.mjs")
+    codex_hooks = _read(ROOT / ".codex/hooks.json") or ""
+    if hook_script in codex_hooks and "--host codex --target claude" in codex_hooks:
+        out.append(check("codex_dispatch_hook", "Codex dispatch hook", "healthy",
+                         "exact $claude is intercepted before model invocation"))
+    else:
+        out.append(check("codex_dispatch_hook", "Codex dispatch hook", "issue",
+                         "project-local UserPromptSubmit handler is missing",
+                         auto=[f"bash {script('install_dispatchers.sh')}"],
+                         manual="repair, then trust this project in Codex"))
+
+    claude_hooks = _read(ROOT / ".claude/settings.local.json") or ""
+    if hook_script in claude_hooks and "--host claude --target codex" in claude_hooks:
+        out.append(check("claude_dispatch_hooks", "Claude dispatch hooks", "healthy",
+                         "/codex expansion and next-task submit handlers are installed"))
+    else:
+        out.append(check("claude_dispatch_hooks", "Claude dispatch hooks", "issue",
+                         "project-local dispatch handlers are missing",
+                         auto=[f"bash {script('install_dispatchers.sh')}"],
+                         manual="repair, then trust this project in Claude Code"))
 
     missing = []
     unsafe = []
@@ -259,7 +272,7 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
             unsafe.append(skill_name)
     if missing:
         out.append(check("claude_dispatcher", "$claude skill", "issue",
-                         f"picker choices not visible: {', '.join(missing)}",
+                         f"exact dispatcher not visible: {', '.join(missing)}",
                          auto=[f"bash {script('bridge_skills.sh')}"]))
     elif unsafe:
         out.append(check("claude_dispatcher", "$claude skill", "issue",
@@ -267,7 +280,7 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
                          auto=[f"bash {script('bridge_skills.sh')}"]))
     else:
         out.append(check("claude_dispatcher", "$claude skill", "healthy",
-                         "five pre-send configuration choices visible and explicit-only"))
+                         "exact dispatcher is visible and explicit-only"))
     return out
 
 

@@ -1,17 +1,17 @@
 ---
-description: 在当前项目安装 Claude ↔ Codex 的发送前配置候选
+description: 在当前项目安装 Claude ↔ Codex 的单入口键盘派遣器
 allowed-tools:
   - Bash
 ---
 
 # cc-suite 初始化
 
-本版本只提供两组前缀候选：
+本版本只提供两个显式入口：
 
-- Claude：输入 `/codex`，先选配置，在同一输入框追加任务，再发送一次。
-- Codex：输入 `$claude`，先选配置，在同一输入框追加任务，再发送一次。
+- Claude：只输入 `/codex` 并回车，在模型调用前用键盘选择配置；然后发送任务。
+- Codex：只输入 `$claude` 并回车，在模型调用前用键盘选择配置；然后发送任务。
 
-不要创建 exact `/codex` 命令，不要在消息发出后询问编号，也不要生成
+不要生成编号配置候选，不要在消息发出后询问配置，也不要生成
 implement、review、plan、audit 或 debug 分类。
 
 1. 检查 `node`、`codex` 和 `claude` 均可用；缺失时明确报错并停止。
@@ -25,9 +25,9 @@ implement、review、plan、audit 或 debug 分类。
 3. 若成功，只报告：
 
    ```text
-   cc-suite 已为当前项目安装发送前配置候选。
-   Claude：输入 /codex → 选配置 → 追加任务 → 发送
-   Codex：输入 $claude → 选配置 → 追加任务 → 发送
+   cc-suite 已为当前项目安装单入口键盘派遣器。
+   Claude：输入 /codex 并回车 → 选配置 → 发送任务
+   Codex：输入 $claude 并回车 → 选配置 → 发送任务
    每次新任务或追问都要重新输入目标前缀。
    ```
 

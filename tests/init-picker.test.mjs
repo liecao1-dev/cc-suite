@@ -7,8 +7,8 @@ const PLUGIN_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname)
 const INIT = fs.readFileSync(path.join(PLUGIN_ROOT, "commands", "init.md"), "utf8");
 
 test("init teaches the same pre-send interaction in both hosts", () => {
-  assert.match(INIT, /Claude：输入 \/codex → 选配置 → 追加任务 → 发送/);
-  assert.match(INIT, /Codex：输入 \$claude → 选配置 → 追加任务 → 发送/);
+  assert.match(INIT, /Claude：输入 \/codex 并回车 → 选配置 → 发送任务/);
+  assert.match(INIT, /Codex：输入 \$claude 并回车 → 选配置 → 发送任务/);
   assert.match(INIT, /每次新任务或追问都要重新输入目标前缀/);
   assert.doesNotMatch(INIT, /回复 [123]|AskUserQuestion|multiSelect/);
 });

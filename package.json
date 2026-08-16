@@ -3,7 +3,7 @@
   "version": "3.2.0",
   "private": true,
   "type": "module",
-  "description": "Project-scoped Claude Code and Codex delegation with pre-send configuration pickers",
+  "description": "Project-scoped Claude Code and Codex delegation with pre-model keyboard configuration pickers",
   "license": "ISC",
   "engines": {
     "node": ">=18.18.0"

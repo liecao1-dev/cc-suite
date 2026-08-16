@@ -1,6 +1,0 @@
-interface:
-  display_name: "Claude 5｜派遣｜Haiku"
-  short_description: "haiku · medium · permission=default"
-  default_prompt: "使用 $claude-5-haiku，以 Claude Haiku 配置派遣我接下来写的任务。"
-policy:
-  allow_implicit_invocation: false

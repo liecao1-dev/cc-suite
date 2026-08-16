@@ -50,6 +50,7 @@ CLAUDE.local.md
 # cc-suite: plugin repo — these are consumer-workspace scaffolds created when
 # the plugin repository is used as its own local test target. They are not
 # plugin source files and must not appear in releases.
+.codex/hooks.json
 .codex/config.toml
 .codex/prompts/
 .gemini/

@@ -148,12 +148,10 @@ assert_dir  ".codex/prompts"
 assert_file ".codex/prompts/.gitkeep"
 assert_file ".codex/config.toml"
 assert_no_file ".claude/commands/codex.md"
-assert_file ".claude/skills/codex-1-recent/SKILL.md"
-assert_file ".claude/skills/codex-2-default/SKILL.md"
-assert_file ".claude/skills/codex-3-gpt-test-fast/SKILL.md"
-for _claude_skill in claude-1-recent claude-2-default claude-3-sonnet claude-4-opus claude-5-haiku; do
-  assert_file ".agents/skills/${_claude_skill}/SKILL.md"
-done
+assert_file ".claude/skills/codex/SKILL.md"
+assert_file ".agents/skills/claude/SKILL.md"
+assert_contains ".codex/hooks.json" "--host codex --target claude"
+assert_contains ".claude/settings.local.json" "--host claude --target codex"
 assert_file ".gitignore"
 assert_contains ".gitignore" "# >>> cc-suite >>>"
 assert_contains ".gitignore" "# <<< cc-suite <<<"
@@ -235,11 +233,11 @@ make_tmp
 
 assert_exit0 bash "$SCRIPTS/init.sh"
 hash1="$(md5 -q AGENTS.md 2>/dev/null || md5sum AGENTS.md | awk '{print $1}')"
-dispatcher_hash1="$(md5 -q .claude/skills/codex-1-recent/SKILL.md 2>/dev/null || md5sum .claude/skills/codex-1-recent/SKILL.md | awk '{print $1}')"
+dispatcher_hash1="$(md5 -q .claude/skills/codex/SKILL.md 2>/dev/null || md5sum .claude/skills/codex/SKILL.md | awk '{print $1}')"
 
 assert_exit0 bash "$SCRIPTS/init.sh"
 hash2="$(md5 -q AGENTS.md 2>/dev/null || md5sum AGENTS.md | awk '{print $1}')"
-dispatcher_hash2="$(md5 -q .claude/skills/codex-1-recent/SKILL.md 2>/dev/null || md5sum .claude/skills/codex-1-recent/SKILL.md | awk '{print $1}')"
+dispatcher_hash2="$(md5 -q .claude/skills/codex/SKILL.md 2>/dev/null || md5sum .claude/skills/codex/SKILL.md | awk '{print $1}')"
 
 if [ "$hash1" = "$hash2" ]; then ok_msg "AGENTS.md unchanged on re-run"
 else                              fail_msg "AGENTS.md changed on re-run"; fi
@@ -292,7 +290,7 @@ cleanup
 # ═══════════════════════════════════════════════════════════════════════════════
 # T08  bridge_skills.sh — creates a real Codex scan dir with $claude choices
 # ═══════════════════════════════════════════════════════════════════════════════
-section 'T08: bridge_skills.sh — creates pre-send $claude choice links'
+section 'T08: bridge_skills.sh — creates exact $claude discovery link'
 make_tmp
 
 mkdir -p .agents/skills/my-skill
@@ -303,11 +301,8 @@ assert_exit0 bash "$SCRIPTS/bridge_skills.sh"
 assert_dir           ".agents/skills"
 assert_no_symlink    ".agents/skills"
 assert_file          ".agents/skills/my-skill/SKILL.md"
-for _claude_skill in claude-1-recent claude-2-default claude-3-sonnet claude-4-opus claude-5-haiku; do
-  assert_symlink ".agents/skills/${_claude_skill}"
-  assert_file ".agents/skills/${_claude_skill}/SKILL.md"
-done
-assert_no_symlink ".agents/skills/claude"
+assert_symlink ".agents/skills/claude"
+assert_file ".agents/skills/claude/SKILL.md"
 
 cleanup
 
@@ -322,10 +317,8 @@ assert_exit0 bash "$SCRIPTS/bridge_skills.sh"
 assert_exit0 bash "$SCRIPTS/bridge_skills.sh"
 assert_dir     ".agents/skills"
 assert_no_symlink ".agents/skills"
-for _claude_skill in claude-1-recent claude-2-default claude-3-sonnet claude-4-opus claude-5-haiku; do
-  assert_symlink ".agents/skills/${_claude_skill}"
-  assert_file ".agents/skills/${_claude_skill}/SKILL.md"
-done
+assert_symlink ".agents/skills/claude"
+assert_file ".agents/skills/claude/SKILL.md"
 
 cleanup
 
@@ -1033,9 +1026,7 @@ assert_file     "CLAUDE.md"
 assert_contains "CLAUDE.md" "# My Real Project"    # original content restored
 assert_contains "CLAUDE.md" "Do great things."
 assert_no_dir     ".agents/skills"
-for _claude_skill in claude-1-recent claude-2-default claude-3-sonnet claude-4-opus claude-5-haiku; do
-  assert_no_symlink ".agents/skills/${_claude_skill}"
-done
+assert_no_symlink ".agents/skills/claude"
 # .mcp.json and .claude/ untouched
 assert_file ".mcp.json"
 assert_file ".claude/settings.json"
@@ -2431,8 +2422,7 @@ checks = {c["id"]: c for c in d["checks"]}
 assert d["summary"]["issue"] > 0
 assert checks["agents_md"]["status"] == "issue"
 assert checks["agents_md"]["fix"]["auto"], "agents_md must carry an auto fix"
-for skill in ("claude-1-recent", "claude-2-default", "claude-3-sonnet", "claude-4-opus", "claude-5-haiku"):
-    assert checks[f"claude_skills_link:{skill}"]["status"] == "issue"
+assert checks["claude_skills_link:claude"]["status"] == "issue"
 PY
 cleanup
 
@@ -2471,12 +2461,12 @@ import json
 d = json.load(open("diag.json"))
 checks = {c["id"]: c for c in d["checks"]}
 for cid in ("agents_md", "claude_md", "agents_skills_link",
-            "codex_dispatcher", "claude_dispatcher", "codex_config", "mcp_codex_cli",
+            "codex_dispatcher", "codex_dispatch_hook", "claude_dispatch_hooks",
+            "claude_dispatcher", "codex_config", "mcp_codex_cli",
             "claude_code_reg", "gitignore"):
     assert checks[cid]["status"] == "healthy", f"{cid}: {checks[cid]['status']} — {checks[cid]['detail']}"
-for skill in ("claude-1-recent", "claude-2-default", "claude-3-sonnet", "claude-4-opus", "claude-5-haiku"):
-    cid = f"claude_skills_link:{skill}"
-    assert checks[cid]["status"] == "healthy", f"{cid}: {checks[cid]['status']} — {checks[cid]['detail']}"
+cid = "claude_skills_link:claude"
+assert checks[cid]["status"] == "healthy", f"{cid}: {checks[cid]['status']} — {checks[cid]['detail']}"
 assert d["summary"].get("issue", 0) == 0, d["summary"]
 PY
 cleanup

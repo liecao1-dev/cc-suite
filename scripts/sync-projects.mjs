@@ -127,7 +127,11 @@ if (args.command === "sync") {
   try {
     catalog = loadCatalog(args.catalogFile);
   } catch (error) {
-    fail(`${error.message}. Start Codex once to refresh ~/.codex/models_cache.json, then run sync again.`, 1);
+    // The exact discovery skills and hooks are model-agnostic. A missing
+    // runtime catalog must not prevent project coverage; the picker will read
+    // and validate the live catalog when the user actually triggers /codex.
+    if (args.catalogFile) fail(error.message, 1);
+    catalog = null;
   }
 }
 

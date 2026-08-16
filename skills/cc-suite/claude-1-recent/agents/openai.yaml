@@ -1,6 +1,0 @@
-interface:
-  display_name: "Claude 1｜派遣｜最近配置"
-  short_description: "用上次的模型、推理强度和权限派遣；首次使用默认配置"
-  default_prompt: "使用 $claude-1-recent，以本项目最近一次 Claude 配置派遣我接下来写的任务。"
-policy:
-  allow_implicit_invocation: false

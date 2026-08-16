@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # cc-suite: expose skills to Codex via .agents/skills (idempotent).
 #
-# The explicit Claude configuration entries are linked directly under
-# .agents/skills/. Typing `$claude` therefore shows the configuration choices
-# in Codex's composer before the message is sent. Codex scans immediate skill
-# directories at that real path; it does not discover the old nested layout.
+# One explicit `$claude` entry is linked directly under .agents/skills/.
+# Submitting it opens the project-local keyboard picker before any model call.
 
 set -euo pipefail
 
@@ -12,11 +10,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(dirname "$SCRIPT_DIR")"
 PLUGIN_SKILLS="${PLUGIN_ROOT}/skills/cc-suite"
 CLAUDE_SKILL_NAMES=(
-  claude-1-recent
-  claude-2-default
-  claude-3-sonnet
-  claude-4-opus
-  claude-5-haiku
+  claude
+)
+LEGACY_CLAUDE_SKILL_NAMES=(
+  claude-1-recent claude-2-default claude-3-sonnet claude-4-opus claude-5-haiku
 )
 
 ok()   { printf '✓ %s\n' "$*"; }
@@ -94,25 +91,25 @@ else
   ok ".agents/skills scan directory created"
 fi
 
-# ── Step 3: migrate the old conversational chooser ─────────────────────────
+# ── Step 3: remove only the old flattened configuration links ───────────────
 
-# v3.0 exposed one `$claude` skill that could only ask for a numbered choice
-# after submission. Remove that link only when its target proves cc-suite
-# ownership. A real path or unrelated symlink remains user-owned.
-if [ -L .agents/skills/claude ]; then
-  legacy_agents_target="$(readlink .agents/skills/claude)"
-  case "$legacy_agents_target" in
-    */skills/cc-suite/claude|../../.claude/skills/claude)
-      rm .agents/skills/claude
-      ok "removed obsolete conversational .agents/skills/claude link"
-      ;;
-    *)
-      warn ".agents/skills/claude points to ${legacy_agents_target} — user symlink left alone"
-      ;;
-  esac
-fi
+for skill_name in "${LEGACY_CLAUDE_SKILL_NAMES[@]}"; do
+  target=".agents/skills/${skill_name}"
+  if [ -L "$target" ]; then
+    existing="$(readlink "$target")"
+    case "$existing" in
+      */skills/cc-suite/"${skill_name}")
+        rm "$target"
+        ok "removed legacy ${target}"
+        ;;
+      *) warn "${target} points to ${existing} — user symlink left alone" ;;
+    esac
+  elif [ -e "$target" ]; then
+    warn "${target} is user-owned — legacy name left alone"
+  fi
+done
 
-# ── Step 4: expose each pre-send configuration as an immediate skill ────────
+# ── Step 4: expose the single pre-send dispatcher skill ─────────────────────
 
 # Detect user-owned collisions before creating any new profile link.
 for skill_name in "${CLAUDE_SKILL_NAMES[@]}"; do

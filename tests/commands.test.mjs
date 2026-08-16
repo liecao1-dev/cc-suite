@@ -6,13 +6,6 @@ import assert from "node:assert/strict";
 const PLUGIN_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const COMMANDS_DIR = path.join(PLUGIN_ROOT, "commands");
 const CLAUDE_SKILLS_DIR = path.join(PLUGIN_ROOT, "skills", "cc-suite");
-const CLAUDE_SKILL_PROFILES = new Map([
-  ["claude-1-recent", "recent"],
-  ["claude-2-default", "default"],
-  ["claude-3-sonnet", "model:sonnet"],
-  ["claude-4-opus", "model:opus"],
-  ["claude-5-haiku", "model:haiku"],
-]);
 const PUBLIC_COMMANDS = [
   "cancel", "diagnose", "init", "repair", "result", "status", "unbridge", "update",
 ];
@@ -55,38 +48,31 @@ test("task-taxonomy commands and the after-send chooser are absent", () => {
   ]) assert.equal(fs.existsSync(path.join(COMMANDS_DIR, `${name}.md`)), false, name);
 });
 
-test("init installs both pre-send prefixes through the scoped synchronizer", () => {
+test("init installs both one-entry keyboard dispatchers through the scoped synchronizer", () => {
   const content = readCommand("init");
-  assert.match(content, /输入 `\/codex`，先选配置/);
-  assert.match(content, /输入 `\$claude`，先选配置/);
+  assert.match(content, /只输入 `\/codex` 并回车/);
+  assert.match(content, /只输入 `\$claude` 并回车/);
   assert.match(content, /sync-projects\.mjs/);
   assert.match(content, /--scope "\$PWD" --project "\$PWD"/);
-  assert.match(content, /不要创建 exact `\/codex`/);
   assert.doesNotMatch(content, /AskUserQuestion|mcp_claude|mcp_codex|回复编号/);
 });
 
-test("$claude exposes ordered pre-send choices backed by Claude CLI", () => {
+test("$claude exposes one explicit discovery skill backed by the pre-model hook", () => {
   const onDisk = fs.readdirSync(CLAUDE_SKILLS_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
-  assert.deepEqual(onDisk, [...CLAUDE_SKILL_PROFILES.keys()]);
+  assert.deepEqual(onDisk, ["claude"]);
 
-  let expectedIndex = 1;
-  for (const [skillName, profile] of CLAUDE_SKILL_PROFILES) {
-    const skillDir = path.join(CLAUDE_SKILLS_DIR, skillName);
-    const content = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
-    const policy = fs.readFileSync(path.join(skillDir, "agents", "openai.yaml"), "utf8");
-    assert.match(content, new RegExp(`name: ${skillName}`));
-    assert.match(content, new RegExp(`--profile ${profile.replace(":", "\\:")}`));
-    assert.match(content, /claude-runner\.mjs/);
-    assert.match(content, /--prompt-stdin/);
-    assert.match(content, /下一次任务或追问.*重新输入 `\$claude`/s);
-    assert.doesNotMatch(content, /config\.mjs list|AskUserQuestion|mcp__claude-code/);
-    assert.match(policy, new RegExp(`display_name: "Claude ${expectedIndex}｜派遣｜`));
-    assert.match(policy, new RegExp(`default_prompt: ".*\\$${skillName}`));
-    assert.match(policy, /allow_implicit_invocation:\s*false/);
-    assert.doesNotMatch(policy, /^dependencies:/m);
-    expectedIndex += 1;
-  }
+  const skillDir = path.join(CLAUDE_SKILLS_DIR, "claude");
+  const content = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
+  const policy = fs.readFileSync(path.join(skillDir, "agents", "openai.yaml"), "utf8");
+  assert.match(content, /^name: claude$/m);
+  assert.match(content, /UserPromptSubmit/);
+  assert.match(content, /\$claude.*选择配置.*发送任务/s);
+  assert.doesNotMatch(content, /claude-[1-5]|回复编号|AskUserQuestion|mcp__claude-code/);
+  assert.match(policy, /display_name: "Claude｜派遣"/);
+  assert.match(policy, /default_prompt: "使用 \$claude/);
+  assert.match(policy, /allow_implicit_invocation:\s*false/);
+  assert.doesNotMatch(policy, /^dependencies:/m);
 });
 
 test("plugin hooks track job lifecycle without the removed audit gate", () => {

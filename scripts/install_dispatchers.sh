@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the pre-send /codex-* picker entries for the current project.
+# Install the exact /codex and $claude discovery entries plus local TTY hooks.
 
 set -euo pipefail
 

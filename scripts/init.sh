@@ -209,11 +209,11 @@ else
   skip ".codex/config.toml already exists"
 fi
 
-# --- 6. Pre-send dispatch pickers ------------------------------------------
-# The project installer creates both sides at the actual project root:
-# `.agents/skills/claude-*` for Codex and `.claude/skills/codex-*` for Claude.
-# There is deliberately no exact `/codex` command: typing that prefix keeps the
-# composer open so the user chooses a configuration before sending.
+# --- 6. One-entry keyboard dispatchers -------------------------------------
+# The project installer creates exact discovery entries and project-local hooks
+# at the actual project root: `.agents/skills/claude` for Codex and
+# `.claude/skills/codex` for Claude. The hook blocks the trigger before either
+# host model runs, then opens the `/dev/tty` configuration picker.
 if tool_enabled codex; then
   bash "${SCRIPT_DIR}/install_dispatchers.sh"
 else

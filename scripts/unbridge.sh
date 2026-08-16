@@ -362,7 +362,8 @@ if ! python3 "${SCRIPT_DIR}/bridge_tools.py" --unbridge; then
   UNBRIDGE_FAILED=1
 fi
 
-# Remove generated dispatchers and proven cc-suite-owned skill links. Never
+# Remove exact generated dispatchers, their project-local hooks, and proven
+# cc-suite-owned skill links. Never
 # delete a real user skill or a symlink pointing somewhere unrelated.
 bash "${SCRIPT_DIR}/uninstall_dispatchers.sh"
 
@@ -392,7 +393,7 @@ for _skill_name in "${CLAUDE_SKILL_NAMES[@]}"; do
   fi
 done
 
-# Remove the v3.0 conversational chooser when upgrading and then unbridging.
+# Remove the current exact `$claude` discovery skill.
 if [ -L .agents/skills/claude ]; then
   _agents_claude_target="$(readlink .agents/skills/claude)"
   case "$_agents_claude_target" in

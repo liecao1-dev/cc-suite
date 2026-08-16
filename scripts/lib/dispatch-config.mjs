@@ -2,14 +2,18 @@ const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export const TARGETS = Object.freeze({
   codex: Object.freeze({
-    efforts: Object.freeze(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]),
+    efforts: Object.freeze(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]),
     access: Object.freeze(["read-only", "workspace-write", "danger-full-access"]),
+    approvals: Object.freeze(["untrusted", "on-request", "never"]),
     defaultEffort: "medium",
     defaultAccess: "workspace-write",
+    defaultApproval: "on-request",
   }),
   claude: Object.freeze({
     efforts: Object.freeze(["low", "medium", "high", "xhigh", "max"]),
-    access: Object.freeze(["default", "acceptEdits", "plan"]),
+    access: Object.freeze([
+      "default", "acceptEdits", "auto", "manual", "dontAsk", "plan", "bypassPermissions",
+    ]),
     defaultEffort: "medium",
     defaultAccess: "default",
   }),
@@ -28,6 +32,27 @@ function cleanString(value, field) {
   return value.trim();
 }
 
+export function effortsForModel(model, catalog) {
+  const detail = (catalog?.modelsDetail ?? []).find((entry) => entry.slug === model);
+  if (Array.isArray(detail?.reasoning_efforts) && detail.reasoning_efforts.length) {
+    return detail.reasoning_efforts;
+  }
+  return catalog?.efforts ?? [];
+}
+
+export function defaultEffortForModel(target, model, catalog, preferred = null) {
+  const supported = effortsForModel(model, catalog);
+  if (!supported.length) throw new Error(`${target} model has no advertised reasoning levels: ${model}`);
+  if (preferred && supported.includes(preferred)) return preferred;
+  const detail = (catalog?.modelsDetail ?? []).find((entry) => entry.slug === model);
+  if (detail?.default_reasoning_effort && supported.includes(detail.default_reasoning_effort)) {
+    return detail.default_reasoning_effort;
+  }
+  const fallback = TARGETS[target].defaultEffort;
+  if (supported.includes(fallback)) return fallback;
+  return supported[0];
+}
+
 export function normalizeDispatchConfig(target, value, capabilities = {}) {
   const spec = targetSpec(target);
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -44,7 +69,7 @@ export function normalizeDispatchConfig(target, value, capabilities = {}) {
     ? capabilities.efforts
     : spec.efforts;
   if (!advertisedEfforts.includes(effort)) {
-    throw new Error(`unsupported ${target} effort: ${effort}`);
+    throw new Error(`unsupported ${target} effort for ${model}: ${effort}`);
   }
 
   const access = cleanString(value.access, "access");
@@ -55,55 +80,53 @@ export function normalizeDispatchConfig(target, value, capabilities = {}) {
     throw new Error(`unsupported ${target} access mode: ${access}`);
   }
 
-  return { model, effort, access };
+  const result = { model, effort, access };
+  if (target === "codex") {
+    const approval = cleanString(value.approval ?? spec.defaultApproval, "approval");
+    const advertisedApprovals = Array.isArray(capabilities.approvals) && capabilities.approvals.length
+      ? capabilities.approvals
+      : spec.approvals;
+    if (!advertisedApprovals.includes(approval)) {
+      throw new Error(`unsupported codex approval policy: ${approval}`);
+    }
+    result.approval = approval;
+  }
+  return result;
+}
+
+export function validateAgainstCatalog(target, value, catalog) {
+  if (!catalog || !Array.isArray(catalog.models) || !catalog.models.length) {
+    throw new Error(`${target} catalog has no models`);
+  }
+  if (target === "codex" && !catalog.models.includes(value.model)) {
+    throw new Error(`Codex model is not in the current catalog: ${value.model}`);
+  }
+  return normalizeDispatchConfig(target, value, {
+    efforts: effortsForModel(value.model, catalog),
+    access: catalog.access,
+    approvals: catalog.approvals,
+  });
 }
 
 export function dispatchConfigKey(config) {
-  return `${config.model}\u0000${config.effort}\u0000${config.access}`;
+  return [config.model, config.effort, config.access, config.approval ?? ""].join("\u0000");
 }
 
 export function describeDispatchConfig(target, config) {
-  const accessLabel = target === "codex" ? "sandbox" : "permission";
-  return `${config.model} · ${config.effort} · ${accessLabel}=${config.access}`;
-}
-
-function effortsForModel(model, catalog) {
-  const detail = (catalog.modelsDetail ?? []).find((entry) => entry.slug === model);
-  if (Array.isArray(detail?.reasoning_efforts) && detail.reasoning_efforts.length) {
-    return detail.reasoning_efforts;
+  if (target === "codex") {
+    return `${config.model} · ${config.effort} · sandbox=${config.access} · approval=${config.approval}`;
   }
-  return catalog.efforts ?? [];
+  return `${config.model} · ${config.effort} · permission=${config.access}`;
 }
 
-function compatibleEffort(preferred, model, catalog, target) {
-  const supported = effortsForModel(model, catalog);
-  if (supported.includes(preferred)) return preferred;
-  const fallback = TARGETS[target].defaultEffort;
-  if (supported.includes(fallback)) return fallback;
-  return supported[0] ?? fallback;
-}
-
-function isRecentUsable(target, config, catalog) {
-  try {
-    const efforts = effortsForModel(config.model, catalog);
-    normalizeDispatchConfig(target, config, {
-      efforts: efforts.length ? efforts : catalog.efforts,
-      access: catalog.access,
-    });
-  } catch {
-    return false;
-  }
-  if (target === "codex") return catalog.models.includes(config.model);
-  return config.model === "default" || MODEL_ID.test(config.model);
-}
-
-function profile(target, id, config, badges, displayName, description) {
+function profile(target, id, config, badges, displayName, description, extra = {}) {
   return {
     id,
     badges,
     label: displayName ?? config.model,
     description: description ?? describeDispatchConfig(target, config),
     config,
+    ...extra,
   };
 }
 
@@ -111,61 +134,59 @@ function modelDisplayName(model, catalog) {
   return (catalog.modelsDetail ?? []).find((entry) => entry.slug === model)?.display_name ?? model;
 }
 
-/**
- * Build chooser rows in the fixed UX order:
- * recent configuration, default configuration, then remaining models.
- * Recent and default always remain separate rows. Even when their tuples are
- * identical, the two entries communicate different intent: "reuse my last
- * choice" versus "use the product default". Keeping both is also what makes
- * the composer order stable on first use.
- */
-export function buildDispatchProfiles({ target, recent, defaultConfig, catalog }) {
+function normalizeRecentRecord(recent) {
+  if (!recent || typeof recent !== "object") return null;
+  if (recent.config && typeof recent.config === "object") return recent;
+  return { config: recent, usedAt: null };
+}
+
+/** Build compact model rows. Reasoning/access combinations are intentionally
+ * not flattened: Enter opens the editor and uses the selected model's actual
+ * capability list. */
+export function buildDispatchProfiles({
+  target,
+  recent,
+  defaultConfig,
+  defaultSource = "target CLI effective configuration",
+  catalog,
+}) {
   targetSpec(target);
-  if (!catalog || !Array.isArray(catalog.models) || catalog.models.length === 0) {
-    throw new Error(`${target} catalog has no models`);
-  }
-
-  const defaultEfforts = effortsForModel(defaultConfig.model, catalog);
-  const normalizedDefault = normalizeDispatchConfig(target, defaultConfig, {
-    efforts: defaultEfforts.length ? defaultEfforts : catalog.efforts,
-    access: catalog.access,
-  });
+  const normalizedDefault = validateAgainstCatalog(target, defaultConfig, catalog);
   const rows = [];
-  const seenModels = new Set();
-  let recentUnavailable = false;
+  const seenModels = new Set([normalizedDefault.model]);
+  const recentRecord = normalizeRecentRecord(recent);
   let normalizedRecent = null;
+  let recentUnavailable = false;
 
-  if (recent) {
+  if (recentRecord?.config) {
     try {
-      normalizedRecent = normalizeDispatchConfig(target, recent);
+      normalizedRecent = validateAgainstCatalog(target, recentRecord.config, catalog);
     } catch {
-      normalizedRecent = null;
-    }
-    if (normalizedRecent && !isRecentUsable(target, normalizedRecent, catalog)) {
-      normalizedRecent = null;
       recentUnavailable = true;
     }
   }
 
   if (normalizedRecent) {
+    seenModels.add(normalizedRecent.model);
+    const time = recentRecord.usedAt ? ` · ${recentRecord.usedAt}` : "";
     rows.push(profile(
       target,
       "recent",
       normalizedRecent,
       ["recent"],
-      modelDisplayName(normalizedRecent.model, catalog),
-      describeDispatchConfig(target, normalizedRecent),
+      "最近配置",
+      `${describeDispatchConfig(target, normalizedRecent)}${time}`,
+      { usedAt: recentRecord.usedAt ?? null },
     ));
   } else {
-    // The first-use recent row is explicit and visibly resolves to default at
-    // dispatch time. It must not disappear merely because no MRU exists yet.
     rows.push(profile(
       target,
       "recent",
       normalizedDefault,
       ["recent"],
-      `最近配置（首次为 ${modelDisplayName(normalizedDefault.model, catalog)}）`,
-      `本项目尚无可用最近配置时采用 ${describeDispatchConfig(target, normalizedDefault)}`,
+      "最近配置（首次使用）",
+      `尚无可用记录；本次明确采用 ${describeDispatchConfig(target, normalizedDefault)}`,
+      { usedAt: null, resolvesTo: "default" },
     ));
   }
 
@@ -174,37 +195,51 @@ export function buildDispatchProfiles({ target, recent, defaultConfig, catalog }
     "default",
     normalizedDefault,
     ["default"],
-    modelDisplayName(normalizedDefault.model, catalog),
-    describeDispatchConfig(target, normalizedDefault),
+    "默认配置",
+    `${describeDispatchConfig(target, normalizedDefault)} · 来源：${defaultSource}`,
+    { source: defaultSource },
   ));
-  seenModels.add(normalizedDefault.model);
 
   for (const model of catalog.models) {
     if (seenModels.has(model)) continue;
-    const config = {
+    const config = validateAgainstCatalog(target, {
       model,
-      effort: compatibleEffort(normalizedDefault.effort, model, catalog, target),
+      effort: defaultEffortForModel(target, model, catalog),
       access: normalizedDefault.access,
-    };
-    const detail = (catalog.modelsDetail ?? []).find((entry) => entry.slug === model);
+      ...(target === "codex" ? { approval: normalizedDefault.approval } : {}),
+    }, catalog);
     rows.push(profile(
       target,
       `model:${model}`,
       config,
       [],
-      detail?.display_name ?? model,
+      modelDisplayName(model, catalog),
       describeDispatchConfig(target, config),
     ));
     seenModels.add(model);
   }
 
+  if (target === "claude") {
+    rows.push({
+      id: "custom-model",
+      badges: ["advanced"],
+      label: "其他 Claude 模型 ID…",
+      description: "输入 Claude Code 支持的完整模型名称",
+      config: null,
+    });
+  }
+
   return { profiles: rows, recentUnavailable };
 }
 
-export function readRecentDispatch(configState, target) {
+export function readRecentDispatchRecord(configState, target) {
   const value = configState?.recentDispatch?.[target];
-  if (!value || typeof value !== "object") return null;
-  return value.config ?? null;
+  if (!value || typeof value !== "object" || !value.config) return null;
+  return { config: value.config, usedAt: value.usedAt ?? null };
+}
+
+export function readRecentDispatch(configState, target) {
+  return readRecentDispatchRecord(configState, target)?.config ?? null;
 }
 
 export function withRecentDispatch(configState, target, config, usedAt = new Date().toISOString()) {

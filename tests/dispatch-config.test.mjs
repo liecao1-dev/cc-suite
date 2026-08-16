@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -21,15 +22,28 @@ const codexCatalog = {
   ],
   efforts: ["low", "medium", "high"],
   access: ["read-only", "workspace-write", "danger-full-access"],
+  approvals: ["untrusted", "on-request", "never"],
 };
 
 const PLUGIN_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const configCli = path.join(PLUGIN_ROOT, "scripts", "dispatch-config.mjs");
 
 function runConfig(workspace, args) {
+  const markerDir = path.join(workspace, ".cc-suite");
+  fs.mkdirSync(markerDir, { recursive: true });
+  const marker = path.join(markerDir, "project.json");
+  if (!fs.existsSync(marker)) {
+    fs.writeFileSync(marker, `${JSON.stringify({
+      schema: 1,
+      managedBy: "cc-suite",
+      sourceRoot: PLUGIN_ROOT,
+      scopeRoot: workspace,
+    }, null, 2)}\n`);
+  }
   const result = spawnSync(process.execPath, [configCli, ...args, "--cwd", workspace], {
     cwd: workspace,
     encoding: "utf8",
+    env: { ...process.env, HOME: workspace },
   });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
@@ -46,9 +60,11 @@ test("recent config is first, default config is second, remaining models follow"
   assert.deepEqual(result.profiles.slice(0, 2).map((row) => row.id), ["recent", "default"]);
   assert.deepEqual(result.profiles[0].badges, ["recent"]);
   assert.deepEqual(result.profiles[1].badges, ["default"]);
-  assert.equal(result.profiles[0].label, "GPT Fast");
-  assert.equal(result.profiles[1].label, "GPT New");
-  assert.equal(result.profiles[2].config.model, "gpt-fast");
+  assert.equal(result.profiles[0].label, "最近配置");
+  assert.equal(result.profiles[1].label, "默认配置");
+  assert.match(result.profiles[0].description, /gpt-fast · low/);
+  assert.match(result.profiles[1].description, /gpt-new · medium/);
+  assert.equal(result.profiles[2].config.model, "gpt-old");
 });
 
 test("identical recent and default configs remain separate intent rows", () => {
@@ -159,7 +175,7 @@ test("the CLI keeps recent and default separate even when tuples match", () => {
     assert.deepEqual(listed.profiles.slice(0, 2).map((row) => row.id), ["recent", "default"]);
     assert.deepEqual(listed.profiles[0].badges, ["recent"]);
     assert.deepEqual(listed.profiles[1].badges, ["default"]);
-    assert.equal(listed.profiles.filter((row) => row.config.model === "default").length, 2);
+    assert.equal(listed.profiles.filter((row) => row.config?.model === "default").length, 2);
   } finally {
     cleanupDir(workspace);
   }

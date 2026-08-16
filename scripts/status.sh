@@ -5,11 +5,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_SKILL_NAMES=(
-  claude-1-recent
-  claude-2-default
-  claude-3-sonnet
-  claude-4-opus
-  claude-5-haiku
+  claude
 )
 
 mark() {
@@ -88,34 +84,42 @@ else
   mark ".agents/skills" miss "→ run /cc-suite:repair"
 fi
 
-# Each pre-send configuration must be an immediate child of the scan directory.
+# The exact dispatcher discovery skill must be an immediate child of the scan directory.
 for _skill_name in "${CLAUDE_SKILL_NAMES[@]}"; do
   _skill_path=".agents/skills/${_skill_name}"
   if [ -L "$_skill_path" ]; then
     if [ -f "${_skill_path}/SKILL.md" ]; then
-      mark "$_skill_path" ok '→ $claude pre-send choice'
+      mark "$_skill_path" ok '→ exact $claude dispatcher'
     else
       mark "$_skill_path" warn "symlink broken — run /cc-suite:repair"
     fi
   elif [ -e "$_skill_path" ]; then
-    mark "$_skill_path" warn 'user-owned path blocks this $claude choice'
+    mark "$_skill_path" warn 'user-owned path blocks exact $claude'
   else
-    mark "$_skill_path" miss '$claude choice not exposed — run /cc-suite:repair'
+    mark "$_skill_path" miss '$claude dispatcher not exposed — run /cc-suite:repair'
   fi
 done
 
-# Multiple `/codex-*` skills keep the composer open for a pre-send choice.
-_codex_picker_count=0
-if [ -d .claude/skills ]; then
-  _codex_picker_count="$(find .claude/skills -maxdepth 2 -path '*/codex-*/SKILL.md' -type f -exec grep -l '^<!-- cc-suite-managed-codex-skill sha256=' {} \; 2>/dev/null | wc -l | tr -d ' ')"
-fi
-if [ "${_codex_picker_count:-0}" -ge 2 ]; then
-  mark "/codex pre-send choices" ok "${_codex_picker_count} configurations"
+# Exact `/codex` is a fallback discovery skill; the project hook opens the TTY picker.
+if [ -f .claude/skills/codex/SKILL.md ] && grep -q '^<!-- cc-suite-managed-codex-skill sha256=' .claude/skills/codex/SKILL.md; then
+  mark "/codex dispatcher skill" ok "exact local discovery entry"
 else
-  mark "/codex pre-send choices" miss "run /cc-suite:repair"
+  mark "/codex dispatcher skill" miss "run /cc-suite:repair"
 fi
 if [ -f .claude/commands/codex.md ]; then
-  mark "/codex exact command" warn "user/legacy command may hide the pre-send chooser"
+  mark "/codex exact command" warn "user/legacy command may collide with the dispatcher skill"
+fi
+
+_dispatch_script="${SCRIPT_DIR}/dispatch-hook.mjs"
+if [ -f .codex/hooks.json ] && grep -Fq "${_dispatch_script}" .codex/hooks.json && grep -Fq -- '--host codex --target claude' .codex/hooks.json; then
+  mark "Codex dispatch hook" ok 'intercepts exact $claude before model invocation'
+else
+  mark "Codex dispatch hook" miss 'run /cc-suite:repair and trust the project'
+fi
+if [ -f .claude/settings.local.json ] && grep -Fq "${_dispatch_script}" .claude/settings.local.json && grep -Fq -- '--host claude --target codex' .claude/settings.local.json; then
+  mark "Claude dispatch hooks" ok 'intercept /codex and arm the next task'
+else
+  mark "Claude dispatch hooks" miss 'run /cc-suite:repair and trust the project'
 fi
 
 # .codex
@@ -209,7 +213,7 @@ else
   mark ".mcp.json" miss
 fi
 
-# `$claude-*` now calls the authenticated Claude CLI directly; no project MCP
+# `$claude` now calls the authenticated Claude CLI directly; no project MCP
 # registration is needed or expected.
 if tool_enabled claude && command -v claude >/dev/null 2>&1; then
   _claude_version="$(claude --version 2>/dev/null | head -1 | tr -d '\r')"

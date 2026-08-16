@@ -1,8 +1,8 @@
 // delegation-boundary.mjs — Stop a delegated agent handing the work back.
 //
-// bridge_skills.sh exposes the explicit `$claude` configuration entries
-// directly under .agents/skills/claude-*. A Codex session that Claude itself
-// spawned can see them and could route the request straight back to its author. The independent
+// bridge_skills.sh exposes the explicit `$claude` dispatcher directly under
+// .agents/skills/claude. A Codex session that Claude itself spawned can see it
+// and could route the request straight back to its author. The independent
 // judgment would then collapse into self-review.
 //
 // Two levers close this, and each covers what the other cannot:
@@ -25,11 +25,7 @@
 
 // Skills whose whole purpose is to delegate to Claude Code.
 export const DELEGATING_SKILLS = Object.freeze([
-  "claude-1-recent",
-  "claude-2-default",
-  "claude-3-sonnet",
-  "claude-4-opus",
-  "claude-5-haiku",
+  "claude",
 ]);
 
 // Each invariant sentence is defined exactly once so the canonical copy in
@@ -53,7 +49,7 @@ export const DELEGATION_BOUNDARY = [
   "This request already reached you by delegation from Claude Code.",
   INVARIANT_WORKER_NOT_ROUTER,
   "Perform the analysis yourself and return the result directly.",
-  "Do not activate or invoke any $claude-* workspace skill or otherwise hand the task back to Claude Code.",
+  "Do not activate or invoke the $claude workspace skill or otherwise hand the task back to Claude Code.",
   INVARIANT_NO_RETURN_TO_AUTHOR,
 ].join(" ");
 
@@ -61,7 +57,7 @@ export const CLAUDE_DELEGATION_BOUNDARY = [
   "This request already reached you by delegation from OpenAI Codex.",
   INVARIANT_WORKER_NOT_ROUTER,
   "Perform the task yourself and return the result directly.",
-  "Do not invoke any /codex-* workspace skill or otherwise hand the task back to Codex.",
+  "Do not invoke the /codex workspace skill or otherwise hand the task back to Codex.",
   INVARIANT_NO_RETURN_TO_AUTHOR,
 ].join(" ");
 

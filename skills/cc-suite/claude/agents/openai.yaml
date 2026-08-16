@@ -1,0 +1,6 @@
+interface:
+  display_name: "Claude｜派遣"
+  short_description: "先选 Claude 模型、推理强度和权限，再发送一次性任务"
+  default_prompt: "使用 $claude 打开 Claude 派遣配置选择器。"
+policy:
+  allow_implicit_invocation: false

@@ -9,22 +9,32 @@ description: "Project instructions for the simple Claude Code ↔ Codex dispatch
 
 ## Product contract
 
-- Claude → Codex starts by typing `/codex`, choosing a `/codex-*`
-  configuration candidate in the composer, appending the plain-language task,
-  and sending once.
-- Codex → Claude starts by typing `$claude`, choosing a `$claude-*`
-  configuration candidate in the composer, appending the plain-language task,
-  and sending once.
-- Every dispatch requires an explicit pre-send configuration choice. Keep the
-  candidates numbered as recent configuration, default configuration, then
-  remaining models so the composer order is stable.
+- Claude → Codex starts with an exact `/codex`; Codex → Claude starts with an
+  exact `$claude`. The trigger is a control message, never a task.
+- Before either host model receives the trigger, a project-local hook opens a
+  keyboard picker on `/dev/tty`, saves the selection, and blocks the trigger.
+- The model menu is compact: recent configuration first, effective default
+  second, then every remaining model. It never flattens model/effort/access
+  combinations into dozens of rows.
+- Enter opens that model's configuration editor. Up/Down chooses a field,
+  Left/Right cycles values, Enter confirms, and Esc goes back or cancels.
+- Codex effort choices come from each model's current `models_cache.json`
+  declaration. Claude choices come from the current Claude CLI's global rules;
+  Claude full model IDs remain available through the advanced row.
+- Dangerous full-access modes require a second explicit Enter confirmation.
 - Recent means the last selected `model + effort + access` tuple, never the
-  newest released model. On a project's first use, the recent entry visibly
-  resolves to the default tuple.
-- Routing is non-sticky. Every new task or follow-up must repeat the target
-  prefix. Configuration answers belong to the pending dispatch.
+  newest released model. Codex also stores its approval policy. On first use,
+  the recent row visibly resolves to the effective default tuple. Both rows
+  display exact values, source information, and an MRU timestamp when present.
+- After selection, the next ordinary prompt is the one-shot task. Other slash
+  commands and skill invocations do not consume it. Routing is non-sticky:
+  every new task or follow-up must repeat `/codex` or `$claude`.
 - Never silently fall back to the host model when a target is unavailable.
 - Do not reintroduce task-taxonomy commands such as implement/audit/plan/debug.
+- Installation is project-local throughout the explicit scope. For the normal
+  setup that scope is `/Users/charliefolder/projects`, including discovered Git
+  repos, worktrees, non-Git projects, and the scope-root fallback. Do not write
+  global Claude or Codex settings.
 
 ## Engineering rules
 
@@ -41,15 +51,21 @@ description: "Project instructions for the simple Claude Code ↔ Codex dispatch
 
 - `scripts/sync-projects.mjs` discovers actual project roots inside an explicit
   scope and installs or removes only project-local dispatch artifacts.
-- `scripts/lib/project-dispatch.mjs` generates the ordered Claude-side
-  `/codex-*` choices, owns their hashes, and preserves collisions.
+- `scripts/lib/project-dispatch.mjs` installs exact `/codex` and `$claude`
+  discovery artifacts plus project-local hook entries, owns their hashes, and
+  preserves unrelated settings and collisions.
 - `scripts/install_dispatchers.sh` is the single-project compatibility wrapper
-  around the scoped synchronizer. There is intentionally no exact `/codex`
-  command because it would submit before configuration selection.
-- `skills/cc-suite/claude-*/` contains the ordered, explicit Codex-side
-  `$claude` configuration candidates.
-- `scripts/dispatch-config.mjs` discovers capabilities, orders chooser profiles,
-  validates choices, and stores per-project MRU state.
+  around the scoped synchronizer.
+- `skills/cc-suite/claude/` is the exact Codex-side `$claude` discovery skill;
+  the generated `.claude/skills/codex/` artifact is the Claude-side fallback.
+- `scripts/dispatch-hook.mjs` intercepts triggers and creates one-shot tickets
+  for the next ordinary prompt. `scripts/dispatch-picker.mjs` owns the TTY UI.
+- `scripts/lib/dispatch-catalog.mjs` discovers effective defaults and current
+  target capabilities. `scripts/lib/dispatch-state.mjs` owns pending selection,
+  ticket, TTL, session isolation, and MRU state.
+- `scripts/dispatch-execute.mjs` atomically claims a ticket, revalidates the
+  selected tuple, preserves the selected subdirectory, and starts one runner.
+- `scripts/dispatch-config.mjs` provides a noninteractive diagnostic/config CLI.
 - `scripts/lib/dispatch-config.mjs` contains the pure ordering/validation logic.
 - `scripts/codex-runner.mjs` provides the deadline-bounded Claude → Codex lane.
 - `scripts/claude-runner.mjs` provides the symmetric deadline-bounded
@@ -68,22 +84,21 @@ npm test
 bash tests/integration.sh
 ```
 
-Validate every `$claude` configuration skill separately:
+Validate the `$claude` discovery skill:
 
 ```bash
-for skill in skills/cc-suite/claude-*; do
-  python3 <skill-creator-dir>/scripts/quick_validate.py "$skill"
-done
+python3 <skill-creator-dir>/scripts/quick_validate.py skills/cc-suite/claude
 ```
 
 After setup changes, initialize a temporary project twice and confirm:
 
-- `/codex-*` generated skills remain byte-identical on the second run;
+- the exact `/codex` generated skill and both hook files remain byte-identical
+  on the second run;
 - `$claude` is visible through `.agents/skills`;
 - project state resolves to the project marker while execution keeps the
   user's active subdirectory;
-- a user-owned or edited `.claude/skills/codex-*` or legacy exact `/codex`
-  command is never overwritten.
+- user-owned exact names, unrelated hooks, and unrelated settings are never
+  overwritten or removed.
 
 ## Release discipline
 

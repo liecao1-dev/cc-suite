@@ -9,19 +9,13 @@ import { cleanupDir, makeTempDir } from "./helpers.mjs";
 const PLUGIN_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const BRIDGE_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "bridge_skills.sh");
 const PLUGIN_SKILLS = path.join(PLUGIN_ROOT, "skills", "cc-suite");
-const CLAUDE_SKILL_NAMES = [
-  "claude-1-recent",
-  "claude-2-default",
-  "claude-3-sonnet",
-  "claude-4-opus",
-  "claude-5-haiku",
-];
+const CLAUDE_SKILL_NAMES = ["claude"];
 
 function runBridge(cwd) {
   return spawnSync("bash", [BRIDGE_SCRIPT], { cwd, encoding: "utf8" });
 }
 
-test("bridge exposes pre-send $claude choices as immediate skills and remains idempotent", () => {
+test("bridge exposes exact $claude as an immediate skill and remains idempotent", () => {
   const workspace = makeTempDir();
   try {
     const projectSkill = path.join(workspace, ".agents", "skills", "my-skill");
@@ -41,8 +35,6 @@ test("bridge exposes pre-send $claude choices as immediate skills and remains id
       assert.equal(fs.existsSync(path.join(link, "SKILL.md")), true);
     }
     assert.equal(fs.existsSync(path.join(agentsSkills, "my-skill", "SKILL.md")), true);
-    assert.equal(fs.existsSync(path.join(agentsSkills, "claude")), false);
-
     const second = runBridge(workspace);
     assert.equal(second.status, 0, second.stderr);
     for (const skillName of CLAUDE_SKILL_NAMES) {
@@ -82,7 +74,7 @@ test("bridge migrates the obsolete nested cc-suite link", () => {
   }
 });
 
-test("bridge preserves a user-owned picker entry and fails closed", () => {
+test("bridge preserves a user-owned legacy picker entry while installing exact $claude", () => {
   const workspace = makeTempDir();
   try {
     const claudePath = path.join(workspace, ".agents", "skills", "claude-3-sonnet");
@@ -91,15 +83,19 @@ test("bridge preserves a user-owned picker entry and fails closed", () => {
     fs.writeFileSync(userSkill, "# User Claude Skill\n", "utf8");
 
     const result = runBridge(workspace);
-    assert.notEqual(result.status, 0);
+    assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.readFileSync(userSkill, "utf8"), "# User Claude Skill\n");
     assert.equal(fs.lstatSync(claudePath).isSymbolicLink(), false);
+    assert.equal(
+      fs.realpathSync(path.join(workspace, ".agents", "skills", "claude")),
+      path.join(PLUGIN_SKILLS, "claude"),
+    );
   } finally {
     cleanupDir(workspace);
   }
 });
 
-test("bridge leaves an unrelated legacy $claude entry while adding picker choices", () => {
+test("bridge preserves a user-owned exact $claude collision and fails closed", () => {
   const workspace = makeTempDir();
   try {
     const legacyPath = path.join(workspace, ".agents", "skills", "claude");
@@ -108,14 +104,9 @@ test("bridge leaves an unrelated legacy $claude entry while adding picker choice
     fs.writeFileSync(userSkill, "# User Claude Skill\n", "utf8");
 
     const result = runBridge(workspace);
-    assert.equal(result.status, 0, result.stderr);
+    assert.notEqual(result.status, 0);
     assert.equal(fs.readFileSync(userSkill, "utf8"), "# User Claude Skill\n");
-    for (const skillName of CLAUDE_SKILL_NAMES) {
-      assert.equal(
-        fs.realpathSync(path.join(workspace, ".agents", "skills", skillName)),
-        path.join(PLUGIN_SKILLS, skillName)
-      );
-    }
+    assert.equal(fs.lstatSync(legacyPath).isSymbolicLink(), false);
   } finally {
     cleanupDir(workspace);
   }

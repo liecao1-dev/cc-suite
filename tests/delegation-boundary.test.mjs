@@ -22,11 +22,9 @@ function readScript(name) {
 }
 
 test("the boundary names every skill that delegates back to Claude", () => {
-  for (const skill of DELEGATING_SKILLS) {
-    assert.match(skill, /^claude-/);
-  }
+  assert.deepEqual(DELEGATING_SKILLS, ["claude"]);
   assert.ok(
-    /do not activate or invoke any \$claude-\* workspace skill/i.test(DELEGATION_BOUNDARY),
+    /do not activate or invoke the \$claude workspace skill/i.test(DELEGATION_BOUNDARY),
     "Boundary should forbid both activation and invocation"
   );
 });
@@ -99,7 +97,7 @@ test("both direct CLI runners apply the correct no-bounce boundary", () => {
     assert.ok(DELEGATION_BOUNDARY.includes(sentence));
     assert.ok(CLAUDE_DELEGATION_BOUNDARY.includes(sentence));
   }
-  assert.match(DELEGATION_BOUNDARY, /\$claude-\*/);
-  assert.match(CLAUDE_DELEGATION_BOUNDARY, /\/codex-\*/);
+  assert.match(DELEGATION_BOUNDARY, /\$claude workspace skill/);
+  assert.match(CLAUDE_DELEGATION_BOUNDARY, /\/codex workspace skill/);
   assert.ok(withClaudeDelegationBoundary("task").endsWith("task"));
 });

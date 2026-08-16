@@ -1,6 +1,0 @@
-interface:
-  display_name: "Claude 2｜派遣｜默认配置"
-  short_description: "默认模型 · medium · permission=default"
-  default_prompt: "使用 $claude-2-default，以 Claude 默认配置派遣我接下来写的任务。"
-policy:
-  allow_implicit_invocation: false

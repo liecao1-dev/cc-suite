@@ -33,26 +33,28 @@ function run(script, cwd, catalog = null) {
   });
 }
 
-test("installer creates ordered /codex-* skills and $claude links idempotently", () => {
+test("installer creates exact /codex and $claude entries plus hooks idempotently", () => {
   const workspace = makeTempDir();
   try {
     const catalog = fixture(workspace);
     const first = run(installScript, workspace, catalog);
     assert.equal(first.status, 0, first.stderr);
-    const recent = path.join(workspace, ".claude", "skills", "codex-1-recent", "SKILL.md");
-    const defaultSkill = path.join(workspace, ".claude", "skills", "codex-2-default", "SKILL.md");
-    const other = path.join(workspace, ".claude", "skills", "codex-3-gpt-fast", "SKILL.md");
-    const content = fs.readFileSync(recent, "utf8");
-    assert.equal(fs.existsSync(defaultSkill), true);
-    assert.equal(fs.existsSync(other), true);
+    const codexSkill = path.join(workspace, ".claude", "skills", "codex", "SKILL.md");
+    const content = fs.readFileSync(codexSkill, "utf8");
     assert.match(content, /cc-suite-managed-codex-skill sha256=/);
-    assert.ok(content.includes(path.join(PLUGIN_ROOT, "scripts", "codex-runner.mjs")));
+    assert.match(content, /UserPromptExpansion/);
     assert.equal(fs.existsSync(path.join(workspace, ".claude", "commands", "codex.md")), false);
-    assert.equal(fs.lstatSync(path.join(workspace, ".agents", "skills", "claude-1-recent")).isSymbolicLink(), true);
+    assert.equal(fs.lstatSync(path.join(workspace, ".agents", "skills", "claude")).isSymbolicLink(), true);
+    const codexHooks = fs.readFileSync(path.join(workspace, ".codex", "hooks.json"), "utf8");
+    const claudeHooks = fs.readFileSync(path.join(workspace, ".claude", "settings.local.json"), "utf8");
+    assert.match(codexHooks, /dispatch-hook\.mjs.*--host codex --target claude/);
+    assert.match(claudeHooks, /dispatch-hook\.mjs.*--host claude --target codex/);
 
     const second = run(installScript, workspace, catalog);
     assert.equal(second.status, 0, second.stderr);
-    assert.equal(fs.readFileSync(recent, "utf8"), content);
+    assert.equal(fs.readFileSync(codexSkill, "utf8"), content);
+    assert.equal(fs.readFileSync(path.join(workspace, ".codex", "hooks.json"), "utf8"), codexHooks);
+    assert.equal(fs.readFileSync(path.join(workspace, ".claude", "settings.local.json"), "utf8"), claudeHooks);
   } finally { cleanupDir(workspace); }
 });
 
@@ -61,7 +63,7 @@ test("installer and uninstaller preserve an edited generated skill", () => {
   try {
     const catalog = fixture(workspace);
     assert.equal(run(installScript, workspace, catalog).status, 0);
-    const target = path.join(workspace, ".claude", "skills", "codex-3-gpt-fast", "SKILL.md");
+    const target = path.join(workspace, ".claude", "skills", "codex", "SKILL.md");
     fs.appendFileSync(target, "\nUser customization.\n", "utf8");
     const installAgain = run(installScript, workspace, catalog);
     assert.notEqual(installAgain.status, 0);
@@ -72,14 +74,16 @@ test("installer and uninstaller preserve an edited generated skill", () => {
   } finally { cleanupDir(workspace); }
 });
 
-test("uninstaller removes unchanged managed pickers and links", () => {
+test("uninstaller removes unchanged exact entries and managed hook handlers", () => {
   const workspace = makeTempDir();
   try {
     const catalog = fixture(workspace);
     assert.equal(run(installScript, workspace, catalog).status, 0);
     assert.equal(run(uninstallScript, workspace).status, 0);
-    assert.equal(fs.existsSync(path.join(workspace, ".claude", "skills", "codex-1-recent")), false);
-    assert.equal(fs.existsSync(path.join(workspace, ".agents", "skills", "claude-1-recent")), false);
+    assert.equal(fs.existsSync(path.join(workspace, ".claude", "skills", "codex")), false);
+    assert.equal(fs.existsSync(path.join(workspace, ".agents", "skills", "claude")), false);
+    assert.equal(fs.existsSync(path.join(workspace, ".codex", "hooks.json")), false);
+    assert.equal(fs.existsSync(path.join(workspace, ".claude", "settings.local.json")), false);
     assert.equal(fs.existsSync(path.join(workspace, ".cc-suite", "project.json")), false);
   } finally { cleanupDir(workspace); }
 });

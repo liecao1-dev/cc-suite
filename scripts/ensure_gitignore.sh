@@ -210,6 +210,7 @@ CLAUDE.local.md
 
 # cc-suite-managed symlinks (created by bridge_skills.sh) — derived, not authored
 .claude/skills/cc-suite
+.agents/skills/claude
 .agents/skills/claude-*
 
 # Antigravity workspace MCP config is generated from .mcp.json and may contain

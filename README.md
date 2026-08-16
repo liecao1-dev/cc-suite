@@ -1,6 +1,6 @@
 # cc-suite simple dispatch
 
-cc-suite 3.2 只保留 Claude Code 与 Codex 的双向派遣，不再要求先选
+cc-suite 只保留 Claude Code 与 Codex 的双向派遣，不再要求先选
 implement、review、plan、audit 或 debug 工作流。
 
 ## 日常怎么用
@@ -8,35 +8,41 @@ implement、review、plan、audit 或 debug 工作流。
 在 Claude Code 输入框里：
 
 ```text
-输入 /codex（先不要发送）
-→ 从 /codex-* 候选中选择配置
-→ 在同一输入框追加大白话任务
-→ 发送一次
+只输入 /codex 并回车
+→ 本地键盘选择器立即打开
+→ 选好配置后，再发送一条大白话任务
 ```
 
 在 Codex 输入框里：
 
 ```text
-输入 $claude（先不要发送）
-→ 从 $claude-* 候选中选择配置
-→ 在同一输入框追加大白话任务
-→ 发送一次
+只输入 $claude 并回车
+→ 本地键盘选择器立即打开
+→ 选好配置后，再发送一条大白话任务
 ```
 
-两边都在消息发送前选择配置。发送后不会再打印编号，也不要求回复 `1`、`2`
-或 `3`。每个新任务和追问都要重新输入目标前缀；路由不黏住上一轮。
+触发消息会在宿主模型调用前被项目 hook 拦住，所以不会再让模型打印编号，也不要求
+回复 `1`、`2` 或 `3`。选完后的下一条普通消息才是任务。每个新任务和追问都要
+重新输入目标前缀；路由不黏住上一轮。其他 slash command 或 skill 不会误吃掉已选配置。
 
-候选顺序固定为：
+模型菜单保持精简，顺序固定为：
 
-1. 最近配置：本项目上一次实际选择的 `模型 + 推理强度 + 权限`；
-2. 默认配置；
+1. 最近配置：本项目上一次真正启动的完整配置；
+2. 默认配置：当前目标 CLI 与项目配置共同解析出的有效默认值；
 3. 其他当前可用模型。
 
 “最近”不是最新发布的模型。项目第一次还没有最近记录时，第一个候选会明确使用
-默认配置，但仍与第二个“默认配置”分开显示。
+默认配置，但仍与第二个“默认配置”分开显示。最近行会显示时间；最近与默认两行都
+显示确切的模型、推理强度、权限以及来源。Codex 还会显示审批策略。
+
+在模型行按 Enter 进入配置：`↑/↓` 选择字段，`←/→` 切换该模型实际支持的值，
+Enter 确认，Esc 返回。Codex 的推理强度逐模型读取当前 `~/.codex/models_cache.json`；
+Claude Code 目前只公布全局推理与权限规则，因此从当前 `claude --help` 动态读取并
+用于各 Claude 模型。Claude 的完整模型 ID 可从“其他 Claude 模型 ID…”输入。
+`danger-full-access` 与 `bypassPermissions` 必须再次按 Enter 双确认。
 
 如果本机还有 `$claude-workflow-sync`，输入 `$claude` 会同时看到
-“Claude …｜派遣｜…”和“Claude 工作流同步”。前者派遣任务，后者同步 Claude
+“Claude｜派遣”和“Claude 工作流同步”。前者派遣任务，后者同步 Claude
 Desktop 对话，名称不会混在一起。
 
 ## 为什么每个项目根都要有入口
@@ -45,14 +51,20 @@ Codex 与 Claude 都只会从启动目录向上扫描到当前 Git 仓库根目�
 的 skill 无法越过独立子仓库的边界。因此 cc-suite 保留一份中央实现，并在每个
 实际项目根生成很小的本地入口：
 
-- `.agents/skills/claude-*`：Codex 里的 `$claude` 配置候选；
-- `.claude/skills/codex-*`：Claude 里的 `/codex` 配置候选；
+- `.agents/skills/claude`：Codex 里的 exact `$claude` 发现入口；
+- `.claude/skills/codex`：Claude 里的 exact `/codex` 后备发现入口；
+- `.codex/hooks.json`：只追加 cc-suite 的 Codex `UserPromptSubmit` handler；
+- `.claude/settings.local.json`：只追加 cc-suite 的 Claude 派遣 handlers；
 - `.cc-suite/project.json`：项目边界与来源标记；
-- `.cc-suite/runtime/`：该项目自己的最近配置与 job 状态。
+- `.cc-suite/runtime/`：该项目自己的 pending、一次性 ticket、最近配置与 job 状态。
 
 Git 仓库使用 `.git/info/exclude` 的 cc-suite 区块忽略这些本地产物，不改共享
 `.gitignore`。用户已有的 `.agents`、`.claude`、skill、command 和配置不会被
 覆盖；同名冲突会被保留并报告。
+
+hooks 只安装在显式同步的项目范围内，不写 `~/.codex` 或 `~/.claude`。首次在项目
+中使用时，Codex 或 Claude Code 仍可能要求信任该项目；未信任时选择器不会运行，
+后备 skill 会明确提示修复，不会让宿主模型冒充目标模型。
 
 普通派遣直接调用已登录的 `codex` 或 `claude` CLI，所以不需要在每个仓库写
 `.codex/config.toml` 或安装项目级 Claude MCP。两个 runner 都有 15 分钟硬截止、
@@ -113,8 +125,8 @@ Claude 插件仍提供少量维护入口：
 
 | 入口 | 用途 |
 |---|---|
-| `/cc-suite:init` | 为当前项目安装双向发送前候选 |
-| `/cc-suite:repair` | 幂等刷新当前项目候选 |
+| `/cc-suite:init` | 为当前项目安装双向键盘派遣器 |
+| `/cc-suite:repair` | 幂等刷新当前项目入口与 hooks |
 | `/cc-suite:status` | 查看入口和 job 状态 |
 | `/cc-suite:diagnose` | 结构化诊断 |
 | `/cc-suite:cancel` | 取消运行中的 job |
@@ -122,8 +134,8 @@ Claude 插件仍提供少量维护入口：
 | `/cc-suite:update` | 更新后刷新当前项目 |
 | `/cc-suite:unbridge` | 安全移除当前项目的管理产物 |
 
-没有 exact `/codex` 命令：输入 `/codex` 的目的就是让多个 `/codex-*` 配置在
-发送前出现在候选菜单中。
+没有任务分类命令，也没有“发出任务后再回复编号”的配置流程。Exact `/codex`
+skill 只负责发现与失效提示；正常选择流程由模型调用前的项目 hook 完成。
 
 ## 开发验证
 
@@ -131,7 +143,5 @@ Claude 插件仍提供少量维护入口：
 npm test
 bash tests/integration.sh
 
-for skill in skills/cc-suite/claude-*; do
-  python3 <skill-creator-dir>/scripts/quick_validate.py "$skill"
-done
+python3 <skill-creator-dir>/scripts/quick_validate.py skills/cc-suite/claude
 ```

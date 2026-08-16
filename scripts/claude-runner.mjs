@@ -19,6 +19,7 @@ import {
   waitForExit,
 } from "./lib/process.mjs";
 import { withClaudeDelegationBoundary } from "./lib/delegation-boundary.mjs";
+import { recordRecentDispatch } from "./lib/dispatch-state.mjs";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_TIMER_MS = 2_147_483_647;
@@ -30,6 +31,7 @@ const PERMISSION_MODES = new Set([
   "manual",
   "dontAsk",
   "plan",
+  "bypassPermissions",
 ]);
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
@@ -48,6 +50,7 @@ function parseArgs(argv) {
     permissionMode: "default",
     timeoutMs: DEFAULT_TIMEOUT_MS,
     promptStdin: false,
+    recordRecent: false,
     prompt: null,
   };
   const valueFlags = new Map([
@@ -66,6 +69,11 @@ function parseArgs(argv) {
     }
     if (arg === "--prompt-stdin") {
       args.promptStdin = true;
+      i += 1;
+      continue;
+    }
+    if (arg === "--record-recent") {
+      args.recordRecent = true;
       i += 1;
       continue;
     }
@@ -110,6 +118,9 @@ function claudeArgs(args) {
   ];
   if (args.model !== "default") result.push("--model", args.model);
   if (args.permissionMode !== "default") {
+    if (args.permissionMode === "bypassPermissions") {
+      result.push("--allow-dangerously-skip-permissions");
+    }
     result.push("--permission-mode", args.permissionMode);
   }
   return result;
@@ -132,6 +143,19 @@ function executeClaude(cwd, args, logFile) {
       env: { ...process.env },
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
+    });
+    child.once("spawn", () => {
+      if (!args.recordRecent) return;
+      try {
+        recordRecentDispatch(cwd, "claude", {
+          model: args.model,
+          effort: args.effort,
+          access: args.permissionMode,
+        });
+        appendLog(logFile, "Recorded recent Claude configuration after process start");
+      } catch (error) {
+        appendLog(logFile, `Could not record recent Claude configuration: ${error.message}`);
+      }
     });
     const releaseSignals = installChildSignalForwarding(child);
     let stdout = "";

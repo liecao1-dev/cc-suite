@@ -38,10 +38,13 @@ import {
 } from "./lib/process.mjs";
 import { extractErrorEvent, resolveFailureMessage } from "./lib/codex-errors.mjs";
 import { withDelegationBoundary } from "./lib/delegation-boundary.mjs";
+import { TARGETS } from "./lib/dispatch-config.mjs";
+import { recordRecentDispatch } from "./lib/dispatch-state.mjs";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 const HEARTBEAT_MS = 30 * 1000;
 const SIGKILL_GRACE_MS = 5 * 1000;
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 // Job id this process has registered but not yet finalized (or handed off to a
 // detached worker). main()'s rejection handler marks it failed so a crash can
@@ -61,8 +64,8 @@ function flagValue(value, flag) {
 }
 
 const KNOWN_FLAGS = new Set([
-  "--kind", "--model", "--effort", "--sandbox", "--resume", "--timeout-ms",
-  "--background", "--prompt-stdin", "--session-id", "--summary",
+  "--kind", "--model", "--effort", "--sandbox", "--approval", "--resume", "--timeout-ms",
+  "--background", "--prompt-stdin", "--record-recent", "--session-id", "--summary",
 ]);
 
 function parseArgs(argv) {
@@ -71,10 +74,12 @@ function parseArgs(argv) {
     model: null,
     effort: "medium",
     sandbox: "read-only",
+    approval: "on-request",
     resume: null,
     timeoutMs: DEFAULT_TIMEOUT_MS,
     background: false,
     promptStdin: false,
+    recordRecent: false,
     sessionId: null,
     summary: null,
     prompt: null,
@@ -100,6 +105,11 @@ function parseArgs(argv) {
       i += 1;
       continue;
     }
+    if (arg === "--record-recent") {
+      args.recordRecent = true;
+      i += 1;
+      continue;
+    }
     if (!KNOWN_FLAGS.has(arg)) {
       process.stderr.write(
         arg.startsWith("--")
@@ -121,6 +131,7 @@ function parseArgs(argv) {
       case "--model": args.model = value; break;
       case "--effort": args.effort = value; break;
       case "--sandbox": args.sandbox = value; break;
+      case "--approval": args.approval = value; break;
       case "--resume": args.resume = value; break;
       case "--session-id": args.sessionId = value; break;
       case "--summary": args.summary = value; break;
@@ -146,6 +157,23 @@ function parseArgs(argv) {
     args.prompt = fs.readFileSync(0, "utf8");
   }
 
+  if (args.model && !MODEL_ID.test(args.model)) {
+    process.stderr.write(`Error: invalid model id ${JSON.stringify(args.model)}\n`);
+    process.exit(1);
+  }
+  if (!TARGETS.codex.efforts.includes(args.effort)) {
+    process.stderr.write(`Error: unsupported Codex effort '${args.effort}'\n`);
+    process.exit(1);
+  }
+  if (!TARGETS.codex.access.includes(args.sandbox)) {
+    process.stderr.write(`Error: unsupported Codex sandbox '${args.sandbox}'\n`);
+    process.exit(1);
+  }
+  if (!TARGETS.codex.approvals.includes(args.approval)) {
+    process.stderr.write(`Error: unsupported Codex approval policy '${args.approval}'\n`);
+    process.exit(1);
+  }
+
   return args;
 }
 
@@ -166,6 +194,7 @@ function buildCodexArgs(args, lastMessageFile) {
   codexArgs.push("--skip-git-repo-check");
   codexArgs.push("--json");
   codexArgs.push("-c", `model_reasoning_effort=${args.effort}`);
+  codexArgs.push("-c", `approval_policy=${JSON.stringify(args.approval)}`);
   codexArgs.push("-o", lastMessageFile);
   codexArgs.push(args.prompt);
   return codexArgs;
@@ -204,7 +233,7 @@ function executeCodex(cwd, args, logFile) {
     const codexArgs = buildCodexArgs(boundedArgs, lastMessageFile);
 
     appendLog(logFile, `Exec: codex ${codexArgs.slice(0, -1).join(" ")} <prompt>`);
-    appendLog(logFile, `Model: ${args.model}, Effort: ${args.effort}, Sandbox: ${args.resume ? "(inherited via resume)" : args.sandbox}`);
+    appendLog(logFile, `Model: ${args.model}, Effort: ${args.effort}, Sandbox: ${args.resume ? "(inherited via resume)" : args.sandbox}, Approval: ${args.approval}`);
     appendLog(logFile, `Deadline: ${Math.round(args.timeoutMs / 1000)}s`);
 
     const startedAt = Date.now();
@@ -228,6 +257,20 @@ function executeCodex(cwd, args, logFile) {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env },
       detached: true,
+    });
+    child.once("spawn", () => {
+      if (!args.recordRecent) return;
+      try {
+        recordRecentDispatch(cwd, "codex", {
+          model: args.model,
+          effort: args.effort,
+          access: args.sandbox,
+          approval: args.approval,
+        });
+        appendLog(logFile, "Recorded recent Codex configuration after process start");
+      } catch (error) {
+        appendLog(logFile, `Could not record recent Codex configuration: ${error.message}`);
+      }
     });
     const releaseSignals = installChildSignalForwarding(child);
 
@@ -449,10 +492,12 @@ function runBackground(stateRoot, executionCwd, args) {
     "--model", args.model || "",
     "--effort", args.effort,
     "--sandbox", args.sandbox,
+    "--approval", args.approval,
     "--timeout-ms", String(args.timeoutMs),
     "--session-id", sessionId || "",
     "--summary", args.summary || "",
   ];
+  if (args.recordRecent) childArgv.push("--record-recent");
   if (args.resume) childArgv.push("--resume", args.resume);
   childArgv.push("--", args.prompt);
 

@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-export const CLAUDE_PROFILE_SKILLS = Object.freeze([
+import { catalogFromCodexModelsCache } from "./dispatch-catalog.mjs";
+
+export const CLAUDE_PROFILE_SKILLS = Object.freeze(["claude"]);
+const LEGACY_CLAUDE_PROFILE_SKILLS = Object.freeze([
   "claude-1-recent",
   "claude-2-default",
   "claude-3-sonnet",
@@ -96,64 +99,10 @@ export function discoverProjectRoots(scopeRoot) {
     .sort((a, b) => depth(a) - depth(b) || a.localeCompare(b));
 }
 
-function codexVersion(slug) {
-  const match = String(slug).toLowerCase().match(/gpt-(\d+)(?:\.(\d+))?/);
-  return match ? [Number(match[1]), Number(match[2] ?? 0)] : [-1, -1];
-}
-
 /** Convert Codex's user cache into the same ordered catalog the picker uses,
  * without launching a model call or writing outside the requested scope. */
 export function catalogFromModelsCache(payload) {
-  const models = Array.isArray(payload?.models) ? payload.models : [];
-  const ranked = models
-    .map((model, index) => {
-      const slug = typeof model?.slug === "string" ? model.slug.trim() : "";
-      const displayName = model?.display_name || slug;
-      const description = model?.description || slug;
-      const text = `${slug} ${displayName} ${description}`.toLowerCase();
-      const [major, minor] = codexVersion(slug);
-      return {
-        index,
-        slug,
-        display_name: displayName,
-        description,
-        priority: Number(model?.priority ?? 0) || 0,
-        reasoning_efforts: (model?.supported_reasoning_levels ?? [])
-          .map((level) => level?.effort)
-          .filter((effort) => typeof effort === "string" && effort),
-        reviewOnly: slug.toLowerCase().includes("auto-review") || text.includes("automatic approval review"),
-        latestRank: text.includes("latest") ? 0 : 1,
-        major,
-        minor,
-      };
-    })
-    .filter((model) => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(model.slug))
-    .sort((a, b) =>
-      Number(a.reviewOnly) - Number(b.reviewOnly)
-      || a.latestRank - b.latestRank
-      || b.major - a.major
-      || b.minor - a.minor
-      || a.priority - b.priority
-      || a.index - b.index
-    );
-
-  const dispatchModels = ranked.filter((model) => !model.reviewOnly);
-  if (!dispatchModels.length) throw new Error("Codex models cache contains no general dispatch models");
-  const preferredEfforts = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
-  const effortSet = new Set(dispatchModels.flatMap((model) => model.reasoning_efforts));
-  return {
-    models: dispatchModels.map((model) => model.slug),
-    modelsDetail: dispatchModels.map(({ slug, display_name, description, priority, reasoning_efforts }) => ({
-      slug,
-      display_name,
-      description,
-      priority,
-      reasoning_efforts,
-    })),
-    efforts: preferredEfforts.filter((effort) => effortSet.has(effort)),
-    access: ["read-only", "workspace-write", "danger-full-access"],
-    defaultModel: dispatchModels[0].slug,
-  };
+  return catalogFromCodexModelsCache(payload);
 }
 
 function sha256(text) {
@@ -188,95 +137,29 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'"'"'`)}'`;
 }
 
-function slugify(value) {
-  return String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "model";
+export function buildCodexSkillProfiles() {
+  return [{
+    name: "codex",
+    title: "派遣给 Codex",
+    description: "先打开本地配置选择器，再在下一条消息发送一次性任务。",
+  }];
 }
 
-export function buildCodexSkillProfiles(catalog) {
-  const details = new Map((catalog.modelsDetail ?? []).map((entry) => [entry.slug, entry]));
-  const profiles = [
-    {
-      name: "codex-1-recent",
-      profile: "recent",
-      title: "Codex 1｜派遣｜最近配置",
-      description: "使用本项目上一次选择的完整配置；首次使用时明确采用默认配置。",
-    },
-    {
-      name: "codex-2-default",
-      profile: "default",
-      title: "Codex 2｜派遣｜默认配置",
-      description: `使用当前 Codex 默认模型 ${catalog.defaultModel}、推荐推理强度和 workspace-write。`,
-    },
-  ];
-  let index = 3;
-  const usedNames = new Set(profiles.map((profile) => profile.name));
-  for (const model of catalog.models) {
-    if (model === catalog.defaultModel) continue;
-    let name = `codex-${index}-${slugify(model)}`;
-    if (usedNames.has(name)) name += `-${sha256(model).slice(0, 6)}`;
-    usedNames.add(name);
-    const detail = details.get(model);
-    profiles.push({
-      name,
-      profile: `model:${model}`,
-      title: `Codex ${index}｜派遣｜${detail?.display_name ?? model}`,
-      description: `使用 ${model}、该模型推荐推理强度和 workspace-write。`,
-    });
-    index += 1;
-  }
-  return profiles;
-}
-
-export function renderCodexSkill(profile, sourceRoot) {
-  const configScript = shellQuote(path.join(sourceRoot, "scripts", "dispatch-config.mjs"));
-  const runnerScript = shellQuote(path.join(sourceRoot, "scripts", "codex-runner.mjs"));
+export function renderCodexSkill(profile) {
   const body = `---
 name: ${profile.name}
-description: ${yamlQuote(`${profile.title}。${profile.description} 输入 /codex 后在发送前选择此项，追加大白话任务并一次发送。`)}
-argument-hint: ${yamlQuote("<用大白话写任务>")}
+description: ${yamlQuote(`${profile.title}。直接输入 /codex 并回车，在模型调用前选择模型、推理强度和权限；下一条消息才发送任务。`)}
 disable-model-invocation: true
-allowed-tools:
-  - Bash
 ---
 
 # ${profile.title}
 
-用户已经在发送消息前选定本配置。不要再展示配置列表，不要询问编号，也不要把任务
-改写成 implement、review、plan、audit 或 debug 等工作流。
+正常情况下，项目级 \`UserPromptExpansion\` 钩子会在本 skill 展开前打开键盘选择器，
+并阻止这条 \`/codex\` 消息进入模型。若你现在能读到本段内容，说明钩子没有启用：
 
-1. 将 \`$ARGUMENTS\` 原样视为本次任务。若去掉首尾空白后为空，只询问“这次要
-   Codex 做什么？”，拿到任务前不要解析或记录配置。
-2. 在当前工作目录运行：
-
-   \`\`\`bash
-   node ${configScript} resolve --target codex --profile ${shellQuote(profile.profile)} --cwd "$PWD"
-   \`\`\`
-
-   只解析 stdout JSON。\`status\` 不为 \`ok\` 时显示错误并停止；不得由 Claude
-   冒充 Codex 完成任务。
-3. 任务非空后，用返回的 \`config.model\`、\`config.effort\` 和 \`config.access\`
-   调用同一脚本的 \`record\` 命令。记录失败就停止。
-4. 使用高熵且未在任务中单独成行出现的 heredoc 结束符，把用户任务通过 stdin
-   交给 runner；不得把任务拼进 shell 参数：
-
-   \`\`\`bash
-   node ${runnerScript} \\
-     --kind dispatch \\
-     --model "{model}" \\
-     --effort "{effort}" \\
-     --sandbox "{access}" \\
-     --timeout-ms 900000 \\
-     --summary "codex dispatch" \\
-     --prompt-stdin <<'CC_SUITE_TASK_<fresh-random-suffix>'
-   {task}
-   CC_SUITE_TASK_<fresh-random-suffix>
-   \`\`\`
-
-   runner 会在子进程边界加入“不得把任务派回 Claude”的固定提示，并从用户当前
-   子目录启动 Codex。不得使用 \`--resume\`。
-5. \`status=completed\` 时原样呈现 \`rawOutput\`，并简短列出配置与 \`jobId\`；
-   \`failed\` 或 \`stalled\` 时显示错误并停止，不要自动代答或重试。
-6. 最后提醒：下一次任务或追问仍要重新输入 \`/codex\` 并在发送前选择配置。
+- 不要替 Codex 完成任务，也不要显示编号配置列表。
+- 告诉用户运行项目范围同步器并确认 Claude Code 已信任当前项目。
+- 下一次正确流程始终是：输入 \`/codex\` → 选择配置 → 再发送任务。
 `;
   return addSkillMarker(body);
 }
@@ -320,6 +203,14 @@ function removeEmpty(directory) {
   try { fs.rmdirSync(directory); } catch {}
 }
 
+function symlinkResolvesTo(link, expected) {
+  try {
+    return path.resolve(path.dirname(link), fs.readlinkSync(link)) === path.resolve(expected);
+  } catch {
+    return false;
+  }
+}
+
 function installClaudeLinks(root, sourceRoot, scopeRoot, result) {
   const skillsRoot = path.join(root, ".agents", "skills");
   const existing = fs.lstatSync(skillsRoot, { throwIfNoEntry: false });
@@ -339,6 +230,20 @@ function installClaudeLinks(root, sourceRoot, scopeRoot, result) {
     result.conflicts.push(`.agents/skills could not be prepared: ${error.message}`);
     return;
   }
+
+  for (const name of LEGACY_CLAUDE_PROFILE_SKILLS) {
+    const target = path.join(skillsRoot, name);
+    const expected = path.join(sourceRoot, "skills", "cc-suite", name);
+    const stat = fs.lstatSync(target, { throwIfNoEntry: false });
+    if (!stat) continue;
+    if (stat.isSymbolicLink() && symlinkResolvesTo(target, expected)) {
+      fs.unlinkSync(target);
+      result.removed.push(`${path.relative(root, target)} (legacy flattened configuration)`);
+    } else {
+      result.conflicts.push(`${path.relative(root, target)} is user-owned; legacy name preserved`);
+    }
+  }
+
   for (const name of CLAUDE_PROFILE_SKILLS) {
     const source = path.join(sourceRoot, "skills", "cc-suite", name);
     if (!fs.existsSync(path.join(source, "SKILL.md"))) {
@@ -377,7 +282,7 @@ function installCodexSkills(root, sourceRoot, scopeRoot, catalog, result) {
   const desired = new Set(profiles.map((profile) => profile.name));
 
   for (const entry of fs.readdirSync(skillsRoot, { withFileTypes: true })) {
-    if (!entry.name.startsWith("codex-") || desired.has(entry.name)) continue;
+    if (!(entry.name === "codex" || entry.name.startsWith("codex-")) || desired.has(entry.name)) continue;
     const candidate = path.join(skillsRoot, entry.name);
     if (entry.isDirectory() && !entry.isSymbolicLink() && directoryIsOwnedSkill(candidate)) {
       fs.unlinkSync(path.join(candidate, "SKILL.md"));
@@ -389,7 +294,7 @@ function installCodexSkills(root, sourceRoot, scopeRoot, catalog, result) {
   for (const profile of profiles) {
     const directory = path.join(skillsRoot, profile.name);
     const target = path.join(directory, "SKILL.md");
-    const generated = renderCodexSkill(profile, sourceRoot);
+    const generated = renderCodexSkill(profile);
     if (fs.existsSync(directory) || fs.lstatSync(directory, { throwIfNoEntry: false })) {
       const stat = fs.lstatSync(directory);
       if (stat.isSymbolicLink() || !stat.isDirectory() || !directoryIsOwnedSkill(directory)) {
@@ -494,11 +399,232 @@ function removeLegacyCodexMcpEntry(root, result) {
   result.removed.push(".mcp.json legacy codex-cli MCP registration");
 }
 
+function previousManagedSourceRoot(root) {
+  try {
+    const marker = JSON.parse(fs.readFileSync(path.join(root, ".cc-suite", "project.json"), "utf8"));
+    if (marker?.managedBy === MANAGED_BY && typeof marker.sourceRoot === "string") {
+      return marker.sourceRoot;
+    }
+  } catch {}
+  return null;
+}
+
+function dispatchHookCommands(sourceRoots) {
+  const commands = new Set();
+  for (const sourceRoot of sourceRoots.filter(Boolean)) {
+    const script = path.join(sourceRoot, "scripts", "dispatch-hook.mjs");
+    commands.add(`node ${shellQuote(script)} --host codex --target claude`);
+  }
+  return commands;
+}
+
+function cleanHookGroups(groups, handlerMatches) {
+  if (!Array.isArray(groups)) return null;
+  const cleaned = [];
+  for (const group of groups) {
+    if (!group || typeof group !== "object" || !Array.isArray(group.hooks)) return null;
+    const hooks = group.hooks.filter((handler) => !handlerMatches(handler));
+    if (hooks.length) cleaned.push({ ...group, hooks });
+  }
+  return cleaned;
+}
+
+function installCodexDispatchHook(root, sourceRoot, scopeRoot, result) {
+  const directory = path.join(root, ".codex");
+  try { ensureRealDirectory(directory, scopeRoot); } catch (error) {
+    result.conflicts.push(`.codex hook directory could not be prepared: ${error.message}`);
+    return;
+  }
+  const file = path.join(directory, "hooks.json");
+  if (fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    result.conflicts.push(".codex/hooks.json is a symlink; dispatch hook not installed");
+    return;
+  }
+  let data = {};
+  let existingText = null;
+  if (fs.existsSync(file)) {
+    existingText = fs.readFileSync(file, "utf8");
+    try { data = JSON.parse(existingText); } catch {
+      result.conflicts.push(".codex/hooks.json is invalid JSON; preserved");
+      return;
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      result.conflicts.push(".codex/hooks.json is not a JSON object; preserved");
+      return;
+    }
+  }
+  if (data.hooks !== undefined && (!data.hooks || typeof data.hooks !== "object" || Array.isArray(data.hooks))) {
+    result.conflicts.push(".codex/hooks.json has a non-object hooks field; preserved");
+    return;
+  }
+  const hooks = { ...(data.hooks ?? {}) };
+  const previous = previousManagedSourceRoot(root);
+  const commands = dispatchHookCommands([sourceRoot, previous]);
+  const cleaned = cleanHookGroups(hooks.UserPromptSubmit ?? [], (handler) =>
+    handler?.type === "command" && commands.has(handler.command));
+  if (cleaned === null) {
+    result.conflicts.push(".codex/hooks.json has an unsupported UserPromptSubmit shape; preserved");
+    return;
+  }
+  const command = [...dispatchHookCommands([sourceRoot])][0];
+  cleaned.push({
+    hooks: [{
+      type: "command",
+      command,
+      timeout: 300,
+      additionalContextLimit: 0,
+    }],
+  });
+  hooks.UserPromptSubmit = cleaned;
+  const next = {
+    ...data,
+    ...(existingText === null ? { description: "cc-suite project-scoped dispatch hook." } : {}),
+    hooks,
+  };
+  const generated = `${JSON.stringify(next, null, 2)}\n`;
+  if (generated === existingText) result.unchanged.push(".codex/hooks.json dispatch hook");
+  else {
+    writeAtomic(file, generated, existingText === null ? 0o600 : fs.statSync(file).mode & 0o777);
+    result[existingText === null ? "created" : "updated"].push(".codex/hooks.json dispatch hook");
+  }
+}
+
+function claudeHandler(sourceRoot) {
+  const script = path.join(sourceRoot, "scripts", "dispatch-hook.mjs");
+  return {
+    type: "command",
+    command: `node ${shellQuote(script)} --host claude --target codex`,
+    timeout: 300,
+  };
+}
+
+function isManagedClaudeHandler(handler, sourceRoots) {
+  if (handler?.type !== "command" || typeof handler.command !== "string") return false;
+  return sourceRoots.filter(Boolean).some((sourceRoot) => {
+    if (handler.command === claudeHandler(sourceRoot).command) return true;
+    const legacyArgs = [
+      path.join(sourceRoot, "scripts", "dispatch-hook.mjs"),
+      "--host", "claude", "--target", "codex",
+    ];
+    return handler.command === "node"
+      && Array.isArray(handler.args)
+      && handler.args.length === legacyArgs.length
+      && handler.args.every((value, index) => value === legacyArgs[index]);
+  });
+}
+
+function installClaudeDispatchHooks(root, sourceRoot, scopeRoot, result) {
+  const directory = path.join(root, ".claude");
+  try { ensureRealDirectory(directory, scopeRoot); } catch (error) {
+    result.conflicts.push(`.claude hook directory could not be prepared: ${error.message}`);
+    return;
+  }
+  const file = path.join(directory, "settings.local.json");
+  if (fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    result.conflicts.push(".claude/settings.local.json is a symlink; dispatch hooks not installed");
+    return;
+  }
+  let data = {};
+  let existingText = null;
+  if (fs.existsSync(file)) {
+    existingText = fs.readFileSync(file, "utf8");
+    try { data = JSON.parse(existingText); } catch {
+      result.conflicts.push(".claude/settings.local.json is invalid JSON; preserved");
+      return;
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      result.conflicts.push(".claude/settings.local.json is not a JSON object; preserved");
+      return;
+    }
+  }
+  if (data.hooks !== undefined && (!data.hooks || typeof data.hooks !== "object" || Array.isArray(data.hooks))) {
+    result.conflicts.push(".claude/settings.local.json has a non-object hooks field; preserved");
+    return;
+  }
+  const hooks = { ...(data.hooks ?? {}) };
+  const sourceRoots = [sourceRoot, previousManagedSourceRoot(root)];
+  for (const event of ["UserPromptSubmit", "UserPromptExpansion"]) {
+    const cleaned = cleanHookGroups(hooks[event] ?? [], (handler) => isManagedClaudeHandler(handler, sourceRoots));
+    if (cleaned === null) {
+      result.conflicts.push(`.claude/settings.local.json has an unsupported ${event} shape; preserved`);
+      return;
+    }
+    cleaned.push({
+      ...(event === "UserPromptExpansion" ? { matcher: "^codex$" } : {}),
+      hooks: [claudeHandler(sourceRoot)],
+    });
+    hooks[event] = cleaned;
+  }
+  const next = { ...data, hooks };
+  const generated = `${JSON.stringify(next, null, 2)}\n`;
+  if (generated === existingText) result.unchanged.push(".claude/settings.local.json dispatch hooks");
+  else {
+    writeAtomic(file, generated, existingText === null ? 0o600 : fs.statSync(file).mode & 0o777);
+    result[existingText === null ? "created" : "updated"].push(".claude/settings.local.json dispatch hooks");
+  }
+}
+
+function installProjectHooks(root, sourceRoot, scopeRoot, result) {
+  installCodexDispatchHook(root, sourceRoot, scopeRoot, result);
+  installClaudeDispatchHooks(root, sourceRoot, scopeRoot, result);
+}
+
+function removeCodexDispatchHook(root, sourceRoot, result) {
+  const file = path.join(root, ".codex", "hooks.json");
+  if (!fs.existsSync(file) || fs.lstatSync(file).isSymbolicLink()) return;
+  let data;
+  try { data = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
+  const hooks = { ...(data.hooks ?? {}) };
+  const commands = dispatchHookCommands([sourceRoot, previousManagedSourceRoot(root)]);
+  const cleaned = cleanHookGroups(hooks.UserPromptSubmit ?? [], (handler) =>
+    handler?.type === "command" && commands.has(handler.command));
+  if (cleaned === null) return;
+  if (cleaned.length) hooks.UserPromptSubmit = cleaned;
+  else delete hooks.UserPromptSubmit;
+  const next = { ...data, hooks };
+  if (!Object.keys(hooks).length) delete next.hooks;
+  if (next.description === "cc-suite project-scoped dispatch hook.") delete next.description;
+  if (!Object.keys(next).length) fs.unlinkSync(file);
+  else writeAtomic(file, `${JSON.stringify(next, null, 2)}\n`, fs.statSync(file).mode & 0o777);
+  removeEmpty(path.dirname(file));
+  result.removed.push(".codex/hooks.json dispatch hook");
+}
+
+function removeClaudeDispatchHooks(root, sourceRoot, result) {
+  const file = path.join(root, ".claude", "settings.local.json");
+  if (!fs.existsSync(file) || fs.lstatSync(file).isSymbolicLink()) return;
+  let data;
+  try { data = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
+  const hooks = { ...(data.hooks ?? {}) };
+  const roots = [sourceRoot, previousManagedSourceRoot(root)];
+  for (const event of ["UserPromptSubmit", "UserPromptExpansion"]) {
+    const cleaned = cleanHookGroups(hooks[event] ?? [], (handler) => isManagedClaudeHandler(handler, roots));
+    if (cleaned === null) return;
+    if (cleaned.length) hooks[event] = cleaned;
+    else delete hooks[event];
+  }
+  const next = { ...data, hooks };
+  if (!Object.keys(hooks).length) delete next.hooks;
+  if (!Object.keys(next).length) fs.unlinkSync(file);
+  else writeAtomic(file, `${JSON.stringify(next, null, 2)}\n`, fs.statSync(file).mode & 0o777);
+  removeEmpty(path.dirname(file));
+  result.removed.push(".claude/settings.local.json dispatch hooks");
+}
+
+function removeProjectHooks(root, sourceRoot, result) {
+  removeCodexDispatchHook(root, sourceRoot, result);
+  removeClaudeDispatchHooks(root, sourceRoot, result);
+}
+
 function managedExcludeBlock() {
   return [
     EXCLUDE_OPEN,
+    "/.agents/skills/claude",
     "/.agents/skills/claude-*",
+    "/.claude/skills/codex",
     "/.claude/skills/codex-*",
+    "/.claude/settings.local.json",
+    "/.codex/hooks.json",
     "/.cc-suite/project.json",
     "/.cc-suite/runtime/",
     "/.cc-suite/cache/",
@@ -617,6 +743,7 @@ export function installProjectDispatch({ root, scopeRoot, sourceRoot, catalog })
   const result = { root: resolvedRoot, created: [], updated: [], unchanged: [], removed: [], conflicts: [] };
   installClaudeLinks(resolvedRoot, resolvedSource, resolvedScope, result);
   const profiles = installCodexSkills(resolvedRoot, resolvedSource, resolvedScope, catalog, result);
+  installProjectHooks(resolvedRoot, resolvedSource, resolvedScope, result);
   removeOwnedLegacyCommand(resolvedRoot, result);
   removeManagedMcpBlock(resolvedRoot, result);
   removeLegacyCodexMcpEntry(resolvedRoot, result);
@@ -652,7 +779,7 @@ export function removeProjectDispatch({ root, scopeRoot, sourceRoot }) {
   const result = { root: resolvedRoot, created: [], updated: [], unchanged: [], removed: [], conflicts: [] };
 
   const agentsSkills = path.join(resolvedRoot, ".agents", "skills");
-  for (const name of CLAUDE_PROFILE_SKILLS) {
+  for (const name of [...CLAUDE_PROFILE_SKILLS, ...LEGACY_CLAUDE_PROFILE_SKILLS]) {
     const target = path.join(agentsSkills, name);
     if (!fs.lstatSync(target, { throwIfNoEntry: false })) continue;
     const stat = fs.lstatSync(target);
@@ -660,9 +787,8 @@ export function removeProjectDispatch({ root, scopeRoot, sourceRoot }) {
       result.conflicts.push(`${path.relative(resolvedRoot, target)} is user-owned; preserved`);
       continue;
     }
-    let real = null;
-    try { real = fs.realpathSync.native(target); } catch {}
-    if (real && isWithin(path.join(resolvedSource, "skills", "cc-suite"), real)) {
+    const expected = path.join(resolvedSource, "skills", "cc-suite", name);
+    if (symlinkResolvesTo(target, expected)) {
       fs.unlinkSync(target);
       result.removed.push(path.relative(resolvedRoot, target));
     } else result.conflicts.push(`${path.relative(resolvedRoot, target)} is unrelated; preserved`);
@@ -674,11 +800,11 @@ export function removeProjectDispatch({ root, scopeRoot, sourceRoot }) {
   if (fs.existsSync(claudeSkills) && !fs.lstatSync(claudeSkills).isSymbolicLink()) {
     for (const entry of fs.readdirSync(claudeSkills, { withFileTypes: true })) {
       const candidate = path.join(claudeSkills, entry.name);
-      if (entry.name.startsWith("codex-") && entry.isDirectory() && !entry.isSymbolicLink() && directoryIsOwnedSkill(candidate)) {
+      if ((entry.name === "codex" || entry.name.startsWith("codex-")) && entry.isDirectory() && !entry.isSymbolicLink() && directoryIsOwnedSkill(candidate)) {
         fs.unlinkSync(path.join(candidate, "SKILL.md"));
         fs.rmdirSync(candidate);
         result.removed.push(path.relative(resolvedRoot, candidate));
-      } else if (entry.name.startsWith("codex-")) {
+      } else if (entry.name === "codex" || entry.name.startsWith("codex-")) {
         result.conflicts.push(`${path.relative(resolvedRoot, candidate)} is user-owned; preserved`);
       }
     }
@@ -688,6 +814,7 @@ export function removeProjectDispatch({ root, scopeRoot, sourceRoot }) {
   removeOwnedLegacyCommand(resolvedRoot, result);
   removeManagedMcpBlock(resolvedRoot, result);
   removeLegacyCodexMcpEntry(resolvedRoot, result);
+  removeProjectHooks(resolvedRoot, resolvedSource, result);
   removeProjectMarkerAndRuntime(resolvedRoot, resolvedScope, result);
   removeLocalExclude(resolvedRoot, resolvedScope, result);
   return result;
@@ -711,6 +838,21 @@ export function inspectProjectDispatch({ root, sourceRoot }) {
   for (const name of parsed?.profiles?.codex ?? []) {
     if (!directoryIsOwnedSkill(path.join(root, ".claude", "skills", name))) problems.push(`${name}: missing or user-owned`);
   }
+  try {
+    const hooks = JSON.parse(fs.readFileSync(path.join(root, ".codex", "hooks.json"), "utf8"));
+    const command = [...dispatchHookCommands([sourceRoot])][0];
+    const found = (hooks?.hooks?.UserPromptSubmit ?? [])
+      .some((group) => group?.hooks?.some((handler) => handler?.command === command));
+    if (!found) problems.push("Codex UserPromptSubmit dispatch hook missing");
+  } catch { problems.push("Codex dispatch hooks missing"); }
+  try {
+    const settings = JSON.parse(fs.readFileSync(path.join(root, ".claude", "settings.local.json"), "utf8"));
+    const foundSubmit = (settings?.hooks?.UserPromptSubmit ?? [])
+      .some((group) => group?.hooks?.some((handler) => isManagedClaudeHandler(handler, [sourceRoot])));
+    const foundExpansion = (settings?.hooks?.UserPromptExpansion ?? [])
+      .some((group) => group?.hooks?.some((handler) => isManagedClaudeHandler(handler, [sourceRoot])));
+    if (!foundSubmit || !foundExpansion) problems.push("Claude dispatch hooks missing");
+  } catch { problems.push("Claude dispatch hooks missing"); }
   return { root, ok: problems.length === 0, problems };
 }
 
