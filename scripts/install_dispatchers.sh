@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Install the exact /codex and $claude discovery entries plus local TTY hooks.
+# Install exact /codex and $claude discovery entries plus one-shot task hooks.
+# Scope-level pre-send interception is activated separately by
+# scripts/activate-composer.mjs.
 
 set -euo pipefail
 

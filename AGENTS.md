@@ -9,10 +9,13 @@ description: "Project instructions for the simple Claude Code ↔ Codex dispatch
 
 ## Product contract
 
-- Claude → Codex starts with an exact `/codex`; Codex → Claude starts with an
-  exact `$claude`. The trigger is a control message, never a task.
-- Before either host model receives the trigger, a project-local hook opens a
-  keyboard picker on `/dev/tty`, saves the selection, and blocks the trigger.
+- Claude → Codex starts by selecting the exact `/codex` completion; Codex →
+  Claude starts by selecting the exact `$claude` completion. These are local
+  composer actions, not control messages, and must never be submitted.
+- A scope-owned TTY composer proxy consumes the completion key before the stock
+  CLI can insert or submit the selector, opens the keyboard picker on
+  `/dev/tty`, saves the selection, removes the selector, and returns to an empty
+  composer. Cancel returns to the empty composer with nothing armed.
 - The model menu is compact: recent configuration first, effective default
   second, then every remaining model. It never flattens model/effort/access
   combinations into dozens of rows.
@@ -26,15 +29,20 @@ description: "Project instructions for the simple Claude Code ↔ Codex dispatch
   newest released model. Codex also stores its approval policy. On first use,
   the recent row visibly resolves to the effective default tuple. Both rows
   display exact values, source information, and an MRU timestamp when present.
-- After selection, the next ordinary prompt is the one-shot task. Other slash
-  commands and skill invocations do not consume it. Routing is non-sticky:
-  every new task or follow-up must repeat `/codex` or `$claude`.
+- After every field is selected, the next ordinary prompt is the one-shot task.
+  Sending that task is the first and only message submission in the flow and
+  immediately consumes the selection. Other slash commands and skill
+  invocations do not consume it. Routing is non-sticky: every new task or
+  follow-up must select `/codex` or `$claude` again before sending.
 - Never silently fall back to the host model when a target is unavailable.
 - Do not reintroduce task-taxonomy commands such as implement/audit/plan/debug.
-- Installation is project-local throughout the explicit scope. For the normal
-  setup that scope is `/Users/charliefolder/projects`, including discovered Git
-  repos, worktrees, non-Git projects, and the scope-root fallback. Do not write
-  global Claude or Codex settings.
+- Project hooks, state, launchers, and proxy shims live inside the explicit
+  scope. For the normal setup that scope is `/Users/charliefolder/projects`,
+  including discovered Git repos, worktrees, non-Git projects, and the
+  scope-root fallback. One reversible, marked PATH block in the user's shell
+  startup file may expose the scope shims; they immediately bypass themselves
+  outside the scope and for noninteractive calls. Do not write global Claude or
+  Codex settings.
 
 ## Engineering rules
 
@@ -58,8 +66,16 @@ description: "Project instructions for the simple Claude Code ↔ Codex dispatch
   around the scoped synchronizer.
 - `skills/cc-suite/claude/` is the exact Codex-side `$claude` discovery skill;
   the generated `.claude/skills/codex/` artifact is the Claude-side fallback.
-- `scripts/dispatch-hook.mjs` intercepts triggers and creates one-shot tickets
-  for the next ordinary prompt. `scripts/dispatch-picker.mjs` owns the TTY UI.
+- `scripts/composer-proxy.py` owns pre-submit key interception. It respects the
+  highlighted completion row, so longer entries such as
+  `$claude-workflow-sync` remain independent.
+- `scripts/activate-composer.mjs` and
+  `scripts/lib/composer-activation.mjs` install, inspect, repair, and safely
+  remove the scope-owned CLI shims plus the marked shell PATH block.
+- `scripts/dispatch-select.mjs` opens the picker and binds its complete tuple to
+  the current composer session. `scripts/dispatch-hook.mjs` turns the next real
+  task into a one-shot ticket and only fails closed if a selector is somehow
+  submitted. `scripts/dispatch-picker.mjs` owns the TTY UI.
 - `scripts/lib/dispatch-catalog.mjs` discovers effective defaults and current
   target capabilities. `scripts/lib/dispatch-state.mjs` owns pending selection,
   ticket, TTL, session isolation, and MRU state.
@@ -95,6 +111,8 @@ After setup changes, initialize a temporary project twice and confirm:
 - the exact `/codex` generated skill and both hook files remain byte-identical
   on the second run;
 - `$claude` is visible through `.agents/skills`;
+- selecting either exact completion opens configuration before submission,
+  while moving to another completion row does not;
 - project state resolves to the project marker while execution keeps the
   user's active subdirectory;
 - user-owned exact names, unrelated hooks, and unrelated settings are never

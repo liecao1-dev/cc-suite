@@ -18,6 +18,10 @@ import {
   removeProjectDispatch,
   writeManagedLauncher,
 } from "./lib/project-dispatch.mjs";
+import {
+  inspectComposerActivation,
+  repairComposerActivation,
+} from "./lib/composer-activation.mjs";
 
 const SOURCE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const COMMANDS = new Set(["sync", "status", "remove", "list"]);
@@ -82,7 +86,7 @@ function summarizeResult(result) {
   };
 }
 
-function printHuman(command, scope, roots, results, launcher) {
+function printHuman(command, scope, roots, results, launcher, activation) {
   process.stdout.write(`cc-suite ${command}: ${scope}\n`);
   process.stdout.write(`projects: ${roots.length}\n`);
   for (const result of results) {
@@ -99,6 +103,9 @@ function printHuman(command, scope, roots, results, launcher) {
     for (const conflict of summary.conflicts) process.stdout.write(`    ! ${conflict}\n`);
   }
   if (launcher) process.stdout.write(`launcher: ${launcher}\n`);
+  if (activation) {
+    process.stdout.write(`${activation.ok ? "✓" : "!"} composer pre-send proxy${activation.problems?.length ? ` — ${activation.problems.join("; ")}` : ""}\n`);
+  }
 }
 
 const args = parseArgs(process.argv.slice(2));
@@ -121,6 +128,7 @@ if (args.command === "list") {
 }
 
 let launcher = null;
+let activation = null;
 const results = [];
 let catalog = null;
 if (args.command === "sync") {
@@ -128,8 +136,8 @@ if (args.command === "sync") {
     catalog = loadCatalog(args.catalogFile);
   } catch (error) {
     // The exact discovery skills and hooks are model-agnostic. A missing
-    // runtime catalog must not prevent project coverage; the picker will read
-    // and validate the live catalog when the user actually triggers /codex.
+    // runtime catalog must not prevent project coverage; the pre-send picker
+    // reads and validates the live catalog when the user selects /codex.
     if (args.catalogFile) fail(error.message, 1);
     catalog = null;
   }
@@ -158,18 +166,31 @@ try {
   results.push({ root: scope, error: `launcher: ${error.message}` });
 }
 
+try {
+  if (args.command === "sync" && !args.project) repairComposerActivation(scope);
+  if (args.command === "sync" || args.command === "status") {
+    activation = inspectComposerActivation(scope);
+  }
+} catch (error) {
+  results.push({ root: scope, error: `composer activation: ${error.message}` });
+}
+
 const output = {
   command: args.command,
   scope,
   source,
   roots,
   launcher,
+  activation,
   catalog: catalog ? { defaultModel: catalog.defaultModel, models: catalog.models } : undefined,
   results: results.map((result) => result.error || Object.hasOwn(result, "ok") ? result : summarizeResult(result)),
 };
 if (args.json) process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
-else printHuman(args.command, scope, roots, results, launcher);
+else printHuman(args.command, scope, roots, results, launcher, activation);
 
-if (results.some((result) => result.error || result.ok === false || result.conflicts?.length)) {
+if (
+  results.some((result) => result.error || result.ok === false || result.conflicts?.length)
+  || (args.command === "status" && activation?.ok === false)
+) {
   process.exitCode = 1;
 }

@@ -23,6 +23,45 @@ const COLORS = Object.freeze({
   red: "\u001b[31m",
 });
 
+export function takePickerKey(input, { allowStandaloneEscape = false } = {}) {
+  if (!input) return { incomplete: true, rest: "" };
+
+  if (input[0] === ESC) {
+    if (input.length === 1) {
+      return allowStandaloneEscape
+        ? { key: "escape", rest: "" }
+        : { incomplete: true, rest: input };
+    }
+    if (input[1] === "[") {
+      let end = -1;
+      for (let index = 2; index < input.length; index += 1) {
+        const code = input.charCodeAt(index);
+        if (code >= 0x40 && code <= 0x7e) {
+          end = index;
+          break;
+        }
+      }
+      if (end === -1) return { incomplete: true, rest: input };
+      const sequence = input.slice(0, end + 1);
+      const key = ({
+        [`${ESC}[A`]: "up",
+        [`${ESC}[B`]: "down",
+        [`${ESC}[C`]: "right",
+        [`${ESC}[D`]: "left",
+      })[sequence] ?? sequence;
+      return { key, rest: input.slice(end + 1) };
+    }
+    return { key: "escape", rest: input.slice(1) };
+  }
+
+  const value = String.fromCodePoint(input.codePointAt(0));
+  const rest = input.slice(value.length);
+  if (value === "\r" || value === "\n") return { key: "enter", rest };
+  if (value === "\u0003") return { key: "cancel", rest };
+  if (value === "\u007f" || value === "\b") return { key: "backspace", rest };
+  return { key: value, rest };
+}
+
 export function pickerFields(target, config, catalog) {
   const fields = [
     { key: "effort", label: "推理强度", values: effortsForModel(config.model, catalog) },
@@ -70,6 +109,7 @@ class TtyTerminal {
       throw new Error("could not put /dev/tty into raw mode");
     }
     this.closed = false;
+    this.inputBuffer = "";
     this.signalHandlers = new Map();
     for (const [signal, code] of [["SIGHUP", 129], ["SIGINT", 130], ["SIGTERM", 143]]) {
       const handler = () => {
@@ -97,24 +137,23 @@ class TtyTerminal {
   }
 
   readKey() {
-    let value = "";
-    while (!value) value = this.readChunk();
-    if (value[0] === ESC && value.length < 3) {
-      for (let attempt = 0; attempt < 2 && value.length < 3; attempt += 1) {
-        const more = this.readChunk();
-        if (!more) break;
-        value += more;
+    let emptyEscapeReads = 0;
+    for (;;) {
+      const parsed = takePickerKey(this.inputBuffer, {
+        allowStandaloneEscape: this.inputBuffer === ESC && emptyEscapeReads >= 2,
+      });
+      if (!parsed.incomplete) {
+        this.inputBuffer = parsed.rest;
+        return parsed.key;
+      }
+      const more = this.readChunk();
+      if (more) {
+        this.inputBuffer += more;
+        emptyEscapeReads = 0;
+      } else if (this.inputBuffer === ESC) {
+        emptyEscapeReads += 1;
       }
     }
-    if (value === `${ESC}[A`) return "up";
-    if (value === `${ESC}[B`) return "down";
-    if (value === `${ESC}[C`) return "right";
-    if (value === `${ESC}[D`) return "left";
-    if (value === ESC) return "escape";
-    if (value === "\r" || value === "\n") return "enter";
-    if (value === "\u0003") return "cancel";
-    if (value === "\u007f" || value === "\b") return "backspace";
-    return value;
   }
 
   close() {

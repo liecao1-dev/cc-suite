@@ -100,7 +100,8 @@ for _skill_name in "${CLAUDE_SKILL_NAMES[@]}"; do
   fi
 done
 
-# Exact `/codex` is a fallback discovery skill; the project hook opens the TTY picker.
+# Exact `/codex` is a fallback discovery skill; the scoped composer proxy owns
+# the pre-send picker.
 if [ -f .claude/skills/codex/SKILL.md ] && grep -q '^<!-- cc-suite-managed-codex-skill sha256=' .claude/skills/codex/SKILL.md; then
   mark "/codex dispatcher skill" ok "exact local discovery entry"
 else
@@ -112,14 +113,34 @@ fi
 
 _dispatch_script="${SCRIPT_DIR}/dispatch-hook.mjs"
 if [ -f .codex/hooks.json ] && grep -Fq "${_dispatch_script}" .codex/hooks.json && grep -Fq -- '--host codex --target claude' .codex/hooks.json; then
-  mark "Codex dispatch hook" ok 'intercepts exact $claude before model invocation'
+  mark "Codex dispatch hook" ok 'consumes the selected tuple when the real task is sent'
 else
   mark "Codex dispatch hook" miss 'run /cc-suite:repair and trust the project'
 fi
 if [ -f .claude/settings.local.json ] && grep -Fq "${_dispatch_script}" .claude/settings.local.json && grep -Fq -- '--host claude --target codex' .claude/settings.local.json; then
-  mark "Claude dispatch hooks" ok 'intercept /codex and arm the next task'
+  mark "Claude dispatch hooks" ok 'consume the selected tuple; submitted /codex fails closed'
 else
   mark "Claude dispatch hooks" miss 'run /cc-suite:repair and trust the project'
+fi
+
+# The shell activation is global only as a PATH lookup; its owned shims bypass
+# immediately unless this cwd is inside the marker's explicit scope.
+_composer_scope="$(python3 -c '
+import json
+try:
+    value = json.load(open(".cc-suite/project.json")).get("scopeRoot", "")
+    print(value if isinstance(value, str) else "")
+except Exception:
+    pass
+' 2>/dev/null || true)"
+if [ -n "$_composer_scope" ]; then
+  if node "${SCRIPT_DIR}/activate-composer.mjs" status --scope "$_composer_scope" >/dev/null 2>&1; then
+    mark "Composer pre-send proxy" ok "active for scope ${_composer_scope} (new CLI sessions)"
+  else
+    mark "Composer pre-send proxy" miss "run activate-composer.mjs install --scope ${_composer_scope}, then start a new terminal"
+  fi
+else
+  mark "Composer pre-send proxy" miss "project marker has no scopeRoot — run /cc-suite:repair"
 fi
 
 # .codex

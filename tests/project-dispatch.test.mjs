@@ -100,7 +100,8 @@ test("project install is idempotent, locally ignored, and safely removable", () 
     assert.equal(inspectProjectDispatch({ root: scope, sourceRoot: SOURCE_ROOT }).ok, true);
     const profile = path.join(scope, ".claude", "skills", "codex", "SKILL.md");
     const content = fs.readFileSync(profile, "utf8");
-    assert.match(content, /UserPromptExpansion/);
+    assert.match(content, /composer 代理/);
+    assert.match(content, /\/codex.*不会被插入或发送/s);
     assert.equal(fs.lstatSync(path.join(scope, ".agents", "skills", "claude")).isSymbolicLink(), true);
     assert.match(fs.readFileSync(path.join(scope, ".codex", "hooks.json"), "utf8"), /--host codex --target claude/);
     assert.match(fs.readFileSync(path.join(scope, ".claude", "settings.local.json"), "utf8"), /--host claude --target codex/);

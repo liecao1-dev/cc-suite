@@ -42,7 +42,8 @@ test("installer creates exact /codex and $claude entries plus hooks idempotently
     const codexSkill = path.join(workspace, ".claude", "skills", "codex", "SKILL.md");
     const content = fs.readFileSync(codexSkill, "utf8");
     assert.match(content, /cc-suite-managed-codex-skill sha256=/);
-    assert.match(content, /UserPromptExpansion/);
+    assert.match(content, /composer 代理/);
+    assert.match(content, /\/codex.*不会被插入或发送/s);
     assert.equal(fs.existsSync(path.join(workspace, ".claude", "commands", "codex.md")), false);
     assert.equal(fs.lstatSync(path.join(workspace, ".agents", "skills", "claude")).isSymbolicLink(), true);
     const codexHooks = fs.readFileSync(path.join(workspace, ".codex", "hooks.json"), "utf8");

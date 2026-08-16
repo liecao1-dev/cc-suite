@@ -212,8 +212,9 @@ fi
 # --- 6. One-entry keyboard dispatchers -------------------------------------
 # The project installer creates exact discovery entries and project-local hooks
 # at the actual project root: `.agents/skills/claude` for Codex and
-# `.claude/skills/codex` for Claude. The hook blocks the trigger before either
-# host model runs, then opens the `/dev/tty` configuration picker.
+# `.claude/skills/codex` for Claude. The scope-level composer proxy opens the
+# `/dev/tty` picker before either selector can be inserted or submitted; these
+# hooks consume the selected tuple only when the real task is sent.
 if tool_enabled codex; then
   bash "${SCRIPT_DIR}/install_dispatchers.sh"
 else

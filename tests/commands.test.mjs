@@ -48,16 +48,17 @@ test("task-taxonomy commands and the after-send chooser are absent", () => {
   ]) assert.equal(fs.existsSync(path.join(COMMANDS_DIR, `${name}.md`)), false, name);
 });
 
-test("init installs both one-entry keyboard dispatchers through the scoped synchronizer", () => {
+test("init installs both pre-send dispatcher entries through the scoped synchronizer", () => {
   const content = readCommand("init");
-  assert.match(content, /只输入 `\/codex` 并回车/);
-  assert.match(content, /只输入 `\$claude` 并回车/);
+  assert.match(content, /补全菜单高亮 `\/codex` 并按 Enter\/Tab/);
+  assert.match(content, /补全菜单高亮 `\$claude` 并按 Enter\/Tab/);
+  assert.match(content, /绝不能作为消息提交/);
   assert.match(content, /sync-projects\.mjs/);
   assert.match(content, /--scope "\$PWD" --project "\$PWD"/);
   assert.doesNotMatch(content, /AskUserQuestion|mcp_claude|mcp_codex|回复编号/);
 });
 
-test("$claude exposes one explicit discovery skill backed by the pre-model hook", () => {
+test("$claude exposes one explicit discovery skill backed by the pre-send proxy", () => {
   const onDisk = fs.readdirSync(CLAUDE_SKILLS_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
   assert.deepEqual(onDisk, ["claude"]);
@@ -66,13 +67,21 @@ test("$claude exposes one explicit discovery skill backed by the pre-model hook"
   const content = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
   const policy = fs.readFileSync(path.join(skillDir, "agents", "openai.yaml"), "utf8");
   assert.match(content, /^name: claude$/m);
-  assert.match(content, /UserPromptSubmit/);
-  assert.match(content, /\$claude.*选择配置.*发送任务/s);
+  assert.match(content, /composer 代理/);
+  assert.match(content, /\$claude.*不会被插入或发送/s);
+  assert.match(content, /选完全部配置.*只发送任务/s);
   assert.doesNotMatch(content, /claude-[1-5]|回复编号|AskUserQuestion|mcp__claude-code/);
-  assert.match(policy, /display_name: "Claude｜派遣"/);
-  assert.match(policy, /default_prompt: "使用 \$claude/);
+  assert.match(policy, /display_name: "Claude · 派遣"/);
+  assert.match(policy, /default_prompt: ".*\$claude/);
   assert.match(policy, /allow_implicit_invocation:\s*false/);
   assert.doesNotMatch(policy, /^dependencies:/m);
+});
+
+test("the Claude dispatcher sorts before the workflow-sync completion", () => {
+  assert.ok(
+    Buffer.compare(Buffer.from("Claude · 派遣"), Buffer.from("Claude 工作流同步")) < 0,
+    "the exact dispatcher must remain the first stock Codex completion",
+  );
 });
 
 test("plugin hooks track job lifecycle without the removed audit gate", () => {

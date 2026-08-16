@@ -8,22 +8,28 @@ implement、review、plan、audit 或 debug 工作流。
 在 Claude Code 输入框里：
 
 ```text
-只输入 /codex 并回车
-→ 本地键盘选择器立即打开
-→ 选好配置后，再发送一条大白话任务
+输入 /codex，让补全菜单高亮 `/codex` 派遣入口
+→ 按 Enter 或 Tab 只是选择派遣，不会发送消息
+→ 本地键盘选择器立即打开，选完模型、推理强度和权限
+→ 回到空输入框，写真正的任务并发送一次
+→ 发送即按刚才的配置开始派遣
 ```
 
 在 Codex 输入框里：
 
 ```text
-只输入 $claude 并回车
-→ 本地键盘选择器立即打开
-→ 选好配置后，再发送一条大白话任务
+输入 $claude，让补全菜单高亮“Claude · 派遣”
+→ 按 Enter 或 Tab 只是选择派遣，不会发送消息
+→ 本地键盘选择器立即打开，选完模型、推理强度和权限
+→ 回到空输入框，写真正的任务并发送一次
+→ 发送即按刚才的配置开始派遣
 ```
 
-触发消息会在宿主模型调用前被项目 hook 拦住，所以不会再让模型打印编号，也不要求
-回复 `1`、`2` 或 `3`。选完后的下一条普通消息才是任务。每个新任务和追问都要
-重新输入目标前缀；路由不黏住上一轮。其他 slash command 或 skill 不会误吃掉已选配置。
+这里没有“触发消息”：`$claude` 和 `/codex` 都是发送前的本地选择动作。代理会在
+Enter/Tab 到达宿主 CLI 前吃掉按键、打开配置，并把输入框清空；选择配置期间不会
+调用任何模型。只有之后写下的真实任务会被发送，而且一发送就开始派遣。取消配置
+则什么都不发送、也不保留配置。每个新任务和追问都要重新选择目标；路由不黏住
+上一轮。其他 slash command 或 skill 不会误吃掉已选配置。
 
 模型菜单保持精简，顺序固定为：
 
@@ -42,8 +48,8 @@ Claude Code 目前只公布全局推理与权限规则，因此从当前 `claude
 `danger-full-access` 与 `bypassPermissions` 必须再次按 Enter 双确认。
 
 如果本机还有 `$claude-workflow-sync`，输入 `$claude` 会同时看到
-“Claude｜派遣”和“Claude 工作流同步”。前者派遣任务，后者同步 Claude
-Desktop 对话，名称不会混在一起。
+“Claude · 派遣”和“Claude 工作流同步”。用 `↑/↓` 高亮后再按 Enter：选前者才打开
+派遣配置，选后者仍按它自己的方式同步 Claude Desktop 对话，不会被误拦截。
 
 ## 为什么每个项目根都要有入口
 
@@ -62,9 +68,11 @@ Git 仓库使用 `.git/info/exclude` 的 cc-suite 区块忽略这些本地产物
 `.gitignore`。用户已有的 `.agents`、`.claude`、skill、command 和配置不会被
 覆盖；同名冲突会被保留并报告。
 
-hooks 只安装在显式同步的项目范围内，不写 `~/.codex` 或 `~/.claude`。首次在项目
-中使用时，Codex 或 Claude Code 仍可能要求信任该项目；未信任时选择器不会运行，
-后备 skill 会明确提示修复，不会让宿主模型冒充目标模型。
+hooks 只安装在显式同步的项目范围内，不写 `~/.codex` 或 `~/.claude`。发送前交互由
+范围内的 `.cc-suite/bin/codex` 与 `.cc-suite/bin/claude` 轻量代理完成；它们只在当前
+目录位于该范围下且终端为交互模式时介入，其他目录、脚本调用和版本检查都直接转给
+原 CLI。首次在项目中使用时，Codex 或 Claude Code 仍可能要求信任该项目；未信任时
+会明确停止，不会让宿主模型冒充目标模型。
 
 普通派遣直接调用已登录的 `codex` 或 `claude` CLI，所以不需要在每个仓库写
 `.codex/config.toml` 或安装项目级 Claude MCP。两个 runner 都有 15 分钟硬截止、
@@ -90,6 +98,29 @@ node /Users/charliefolder/projects/vibecoding/cc-suite/scripts/sync-projects.mjs
   --scope /Users/charliefolder/projects
 ```
 
+第一次还要启用一次发送前代理：
+
+```bash
+node /Users/charliefolder/projects/vibecoding/cc-suite/scripts/activate-composer.mjs install \
+  --scope /Users/charliefolder/projects
+```
+
+它只会在 `/Users/charliefolder/projects/.cc-suite/bin/` 生成两个可审计的 shim，并在
+`~/.zshrc` 增加一个带 cc-suite 起止标记的 PATH 区块，不会替换真实 `codex`、
+`claude`，也不会改它们的全局配置。安装后新开一个终端，再从
+`/Users/charliefolder/projects` 的任意层级子项目启动 CLI；不要求启动目录正好等于
+scope 根目录。
+
+检查或完全撤销这层启用：
+
+```bash
+node /Users/charliefolder/projects/vibecoding/cc-suite/scripts/activate-composer.mjs status \
+  --scope /Users/charliefolder/projects
+
+node /Users/charliefolder/projects/vibecoding/cc-suite/scripts/activate-composer.mjs remove \
+  --scope /Users/charliefolder/projects
+```
+
 发现器会处理普通 Git 仓库、嵌套仓库和 worktree，并排除 `.git`、隐藏运行时目录、
 `node_modules`、`dist`、`build`、缓存和依赖目录。非 Git 项目会按常见项目标记识别。
 
@@ -110,14 +141,16 @@ node /Users/charliefolder/projects/vibecoding/cc-suite/scripts/sync-projects.mjs
 /Users/charliefolder/projects/.cc-suite/bin/cc-suite-projects status
 ```
 
-安全移除范围内由 cc-suite 管理的入口与最近配置：
+安全移除范围内由 cc-suite 管理的项目入口与最近配置：
 
 ```bash
 /Users/charliefolder/projects/.cc-suite/bin/cc-suite-projects remove
 ```
 
-移除只删除校验为 cc-suite 所有的文件、目录、链接、旧版标准 MCP 注册和本地
-exclude 区块；用户内容保留。同步本身就是 repair，重复执行不会产生新的差异。
+项目移除只删除校验为 cc-suite 所有的文件、目录、链接、旧版标准 MCP 注册和本地
+exclude 区块；用户内容保留。若还要删除 shell PATH 区块和两个 composer shim，再
+运行上面的 `activate-composer.mjs remove`。同步本身就是 repair，重复执行不会产生
+新的差异。
 
 ## 单个项目与插件维护命令
 
@@ -134,8 +167,9 @@ Claude 插件仍提供少量维护入口：
 | `/cc-suite:update` | 更新后刷新当前项目 |
 | `/cc-suite:unbridge` | 安全移除当前项目的管理产物 |
 
-没有任务分类命令，也没有“发出任务后再回复编号”的配置流程。Exact `/codex`
-skill 只负责发现与失效提示；正常选择流程由模型调用前的项目 hook 完成。
+没有任务分类命令，也没有“先发送 `$claude`／`/codex`，再回复编号”的流程。Exact
+skill 只负责补全菜单发现与代理失效提示；正常配置流程由发送前 composer 代理完成，
+项目 hook 只在真实任务提交时消费已经锁定的配置。
 
 ## 开发验证
 

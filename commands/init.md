@@ -8,10 +8,11 @@ allowed-tools:
 
 本版本只提供两个显式入口：
 
-- Claude：只输入 `/codex` 并回车，在模型调用前用键盘选择配置；然后发送任务。
-- Codex：只输入 `$claude` 并回车，在模型调用前用键盘选择配置；然后发送任务。
+- Claude：在补全菜单高亮 `/codex` 并按 Enter/Tab，先选完配置；再写真正任务并发送。
+- Codex：在补全菜单高亮 `$claude` 并按 Enter/Tab，先选完配置；再写真正任务并发送。
 
-不要生成编号配置候选，不要在消息发出后询问配置，也不要生成
+`/codex` 与 `$claude` 是发送前选择，绝不能作为消息提交。不要生成编号配置候选，
+不要在消息发出后询问配置，也不要生成
 implement、review、plan、audit 或 debug 分类。
 
 1. 检查 `node`、`codex` 和 `claude` 均可用；缺失时明确报错并停止。
@@ -25,10 +26,11 @@ implement、review、plan、audit 或 debug 分类。
 3. 若成功，只报告：
 
    ```text
-   cc-suite 已为当前项目安装单入口键盘派遣器。
-   Claude：输入 /codex 并回车 → 选配置 → 发送任务
-   Codex：输入 $claude 并回车 → 选配置 → 发送任务
-   每次新任务或追问都要重新输入目标前缀。
+   cc-suite 已为当前项目安装派遣入口和 hooks。
+   Claude：选择 /codex → 选完配置 → 写任务 → 只发送任务
+   Codex：选择 $claude → 选完配置 → 写任务 → 只发送任务
+   若上级项目范围尚未启用 composer 代理，还需为那个范围运行 activate-composer.mjs install，并从新终端启动 CLI。
+   每次新任务或追问都要重新选择目标入口。
    ```
 
 若失败，显示原始错误并停止；不得声称已安装，也不得改用宿主模型代答。

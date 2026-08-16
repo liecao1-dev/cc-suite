@@ -1,6 +1,8 @@
 interface:
-  display_name: "Claude｜派遣"
-  short_description: "先选 Claude 模型、推理强度和权限，再发送一次性任务"
-  default_prompt: "使用 $claude 打开 Claude 派遣配置选择器。"
+  # The middle dot sorts before CJK continuation text in Codex's current
+  # fuzzy popup, keeping this exact dispatcher ahead of "Claude 工作流同步".
+  display_name: "Claude · 派遣"
+  short_description: "发送前选定 Claude 的完整配置，再派遣一次任务"
+  default_prompt: "在发送任务前，从补全菜单选择 $claude，并先完成 Claude 派遣配置。"
 policy:
   allow_implicit_invocation: false

@@ -141,25 +141,30 @@ export function buildCodexSkillProfiles() {
   return [{
     name: "codex",
     title: "派遣给 Codex",
-    description: "先打开本地配置选择器，再在下一条消息发送一次性任务。",
+    description: "先在补全菜单完成 Codex 配置，再发送一次性任务。",
   }];
 }
 
 export function renderCodexSkill(profile) {
   const body = `---
 name: ${profile.name}
-description: ${yamlQuote(`${profile.title}。直接输入 /codex 并回车，在模型调用前选择模型、推理强度和权限；下一条消息才发送任务。`)}
+description: ${yamlQuote(`${profile.title}。在 Claude Code 补全菜单选择 /codex 时，范围内的 composer 代理会在提交前打开配置选择器；模型、该模型支持的推理强度和权限全部选好后，用户写下的第一条普通消息才作为一次性任务发送。`)}
 disable-model-invocation: true
 ---
 
 # ${profile.title}
 
-正常情况下，项目级 \`UserPromptExpansion\` 钩子会在本 skill 展开前打开键盘选择器，
-并阻止这条 \`/codex\` 消息进入模型。若你现在能读到本段内容，说明钩子没有启用：
+正常情况下，范围内的 composer 代理会在补全菜单选择 \`/codex\` 的 Enter/Tab 到达
+Claude Code 前打开键盘选择器。\`/codex\` 不会被插入或发送；选完后回到空输入框，
+再写真正的任务，发送即开始一次性派遣。
+
+若你现在能读到本段内容，说明发送前代理没有启用：
 
 - 不要替 Codex 完成任务，也不要显示编号配置列表。
-- 告诉用户运行项目范围同步器并确认 Claude Code 已信任当前项目。
-- 下一次正确流程始终是：输入 \`/codex\` → 选择配置 → 再发送任务。
+- 告诉用户运行项目范围同步器和 \`activate-composer.mjs install\`，再从新终端启动
+  Claude Code，并确认 Claude Code 已信任当前项目。
+- 不要把 \`/codex\` 当成消息发送；如果它已经到达模型，必须停止且不得派遣。
+- 正确流程始终是：在补全菜单选择 \`/codex\` → 选完全部配置 → 写任务 → 只发送任务。
 `;
   return addSkillMarker(body);
 }

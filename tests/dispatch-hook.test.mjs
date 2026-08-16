@@ -27,10 +27,10 @@ function managedProject() {
   return { root, child };
 }
 
-function runHook(project, input, host = "claude", target = "codex") {
+function runHook(project, input, host = "claude", target = "codex", extraEnv = {}) {
   return spawnSync(process.execPath, [HOOK, "--host", host, "--target", target], {
     cwd: project.child,
-    env: { ...process.env },
+    env: { ...process.env, ...extraEnv },
     input: JSON.stringify({ cwd: project.child, ...input }),
     encoding: "utf8",
   });
@@ -65,7 +65,7 @@ test("the next ordinary prompt receives a locked one-shot executor ticket", () =
       assert.match(context, /one-shot dispatch ticket/);
       assert.match(context, /Do not answer, solve/);
       assert.match(context, /gpt-5\.6-sol · max · sandbox=workspace-write · approval=on-request/);
-      assert.match(context, /next task or follow-up must start again with \/codex/);
+      assert.match(context, /before sending the next task or follow-up.*select \/codex/s);
       const token = context.match(/--ticket "([a-f0-9]{32})"/)?.[1];
       assert.ok(token);
       assert.deepEqual(claimDispatchTicket(project.child, token).config, config);
@@ -105,7 +105,7 @@ test("control commands do not consume the pending dispatch", () => {
   });
 });
 
-test("$claude with task text is blocked while $claude-workflow-sync stays unrelated", () => {
+test("a submitted $claude fails closed while $claude-workflow-sync stays unrelated", () => {
   withIsolatedEnv({ CLAUDE_PLUGIN_DATA: undefined }, () => {
     const project = managedProject();
     try {
@@ -116,7 +116,8 @@ test("$claude with task text is blocked while $claude-workflow-sync stays unrela
       }, "codex", "claude");
       const blocked = JSON.parse(combined.stdout);
       assert.equal(blocked.decision, "block");
-      assert.match(blocked.reason, /只输入 \$claude 并回车/);
+      assert.match(blocked.reason, /\$claude 不应作为消息发送/);
+      assert.match(blocked.reason, /发送前 composer 代理/);
 
       const unrelated = runHook(project, {
         hook_event_name: "UserPromptSubmit",
@@ -124,6 +125,38 @@ test("$claude with task text is blocked while $claude-workflow-sync stays unrela
         prompt: "$claude-workflow-sync",
       }, "codex", "claude");
       assert.equal(unrelated.stdout, "");
+    } finally {
+      cleanupDir(project.root);
+    }
+  });
+});
+
+test("the composer session binds a pre-send selection before the native hook session exists", () => {
+  withIsolatedEnv({ CLAUDE_PLUGIN_DATA: undefined }, () => {
+    const project = managedProject();
+    const composerSession = "c".repeat(32);
+    try {
+      savePendingDispatch(project.child, {
+        host: "claude",
+        target: "codex",
+        sessionId: composerSession,
+        config: {
+          model: "gpt-5.6-sol",
+          effort: "ultra",
+          access: "workspace-write",
+          approval: "on-request",
+        },
+      });
+      const task = runHook(project, {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "native-hook-session",
+        prompt: "发送即开始派遣",
+      }, "claude", "codex", {
+        CC_SUITE_COMPOSER_HOST: "claude",
+        CC_SUITE_COMPOSER_SESSION: composerSession,
+      });
+      assert.equal(task.status, 0, task.stderr);
+      assert.match(JSON.parse(task.stdout).hookSpecificOutput.additionalContext, /gpt-5\.6-sol · ultra/);
     } finally {
       cleanupDir(project.root);
     }

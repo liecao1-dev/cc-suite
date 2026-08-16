@@ -285,8 +285,10 @@ function includeClaudeModel(catalog, model) {
     slug: model,
     display_name: model,
     description: "Claude Code configured/full model ID",
-    reasoning_efforts: [...TARGETS.claude.efforts],
-    default_reasoning_effort: TARGETS.claude.defaultEffort,
+    reasoning_efforts: [...catalog.efforts],
+    default_reasoning_effort: catalog.efforts.includes(TARGETS.claude.defaultEffort)
+      ? TARGETS.claude.defaultEffort
+      : catalog.efforts[0],
   });
 }
 
@@ -318,8 +320,10 @@ export function getDispatchEnvironment(target, cwd, options = {}) {
       slug: "default",
       display_name: "Claude account default (not locally pinned)",
       description: "Claude Code account default; no concrete local model was configured",
-      reasoning_efforts: [...TARGETS.claude.efforts],
-      default_reasoning_effort: TARGETS.claude.defaultEffort,
+      reasoning_efforts: [...catalog.efforts],
+      default_reasoning_effort: catalog.efforts.includes(TARGETS.claude.defaultEffort)
+        ? TARGETS.claude.defaultEffort
+        : catalog.efforts[0],
     });
   }
 

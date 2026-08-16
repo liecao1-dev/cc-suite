@@ -6,6 +6,7 @@ import {
   isRiskyConfig,
   pickerFields,
   runPreparedPicker,
+  takePickerKey,
 } from "../scripts/dispatch-picker.mjs";
 
 const catalog = {
@@ -123,4 +124,24 @@ test("field cycling wraps without inventing unsupported combinations", () => {
   const field = { key: "effort", values: ["low", "medium", "high"] };
   assert.equal(cycleConfigField({ effort: "low" }, field, -1).effort, "high");
   assert.equal(cycleConfigField({ effort: "high" }, field, 1).effort, "low");
+});
+
+test("raw TTY parsing preserves every coalesced logical key", () => {
+  let parsed = takePickerKey("\r\u001b[C\u001b[B");
+  assert.deepEqual(parsed, { key: "enter", rest: "\u001b[C\u001b[B" });
+
+  parsed = takePickerKey(parsed.rest);
+  assert.deepEqual(parsed, { key: "right", rest: "\u001b[B" });
+
+  parsed = takePickerKey(parsed.rest);
+  assert.deepEqual(parsed, { key: "down", rest: "" });
+});
+
+test("raw TTY parsing waits for split escape sequences", () => {
+  assert.deepEqual(takePickerKey("\u001b"), { incomplete: true, rest: "\u001b" });
+  assert.deepEqual(takePickerKey("\u001b", { allowStandaloneEscape: true }), {
+    key: "escape",
+    rest: "",
+  });
+  assert.deepEqual(takePickerKey("\u001b["), { incomplete: true, rest: "\u001b[" });
 });

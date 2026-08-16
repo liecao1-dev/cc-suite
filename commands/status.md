@@ -23,7 +23,8 @@ node -e "
 默认显示 active、latest finished 和 recent jobs。若指定 job id，显示对应任务；
 `--json` 时直接返回结构化 JSON。
 
-没有 job 时写：`还没有派遣记录。使用 /codex <任务> 发起一次。`
+没有 job 时写：`还没有派遣记录。先在补全菜单选择 /codex 并完成配置，再写真正任务并发送。`
 
 不要显示已移除的 review gate，不要推荐 `/continue` 或任何任务型命令。每个完成
-job 的后续任务都应重新使用 `/codex <任务>`。
+job 的后续任务都应在发送前重新选择 `/codex` 并完成配置；不得让用户发送
+`/codex <任务>`。

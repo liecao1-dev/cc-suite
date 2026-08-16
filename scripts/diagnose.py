@@ -242,7 +242,7 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
     codex_hooks = _read(ROOT / ".codex/hooks.json") or ""
     if hook_script in codex_hooks and "--host codex --target claude" in codex_hooks:
         out.append(check("codex_dispatch_hook", "Codex dispatch hook", "healthy",
-                         "exact $claude is intercepted before model invocation"))
+                         "selected composer tuple is consumed when the real task is submitted"))
     else:
         out.append(check("codex_dispatch_hook", "Codex dispatch hook", "issue",
                          "project-local UserPromptSubmit handler is missing",
@@ -252,7 +252,7 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
     claude_hooks = _read(ROOT / ".claude/settings.local.json") or ""
     if hook_script in claude_hooks and "--host claude --target codex" in claude_hooks:
         out.append(check("claude_dispatch_hooks", "Claude dispatch hooks", "healthy",
-                         "/codex expansion and next-task submit handlers are installed"))
+                         "task-submit handler and fail-closed /codex expansion guard are installed"))
     else:
         out.append(check("claude_dispatch_hooks", "Claude dispatch hooks", "issue",
                          "project-local dispatch handlers are missing",
@@ -282,6 +282,48 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
         out.append(check("claude_dispatcher", "$claude skill", "healthy",
                          "exact dispatcher is visible and explicit-only"))
     return out
+
+
+def check_composer_activation(enabled: list[str]) -> dict:
+    if "codex" not in enabled:
+        return check("composer_activation", "Composer pre-send proxy", "expected_absent",
+                     "Codex dispatch is not enabled")
+    marker = _load_json(ROOT / ".cc-suite/project.json")
+    scope_value = marker.get("scopeRoot") if isinstance(marker, dict) else None
+    if not isinstance(scope_value, str) or not scope_value:
+        return check("composer_activation", "Composer pre-send proxy", "skipped",
+                     "project dispatch marker has no scopeRoot; run the project repair first")
+    scope = Path(scope_value).expanduser().resolve()
+    manifest = scope / ".cc-suite/composer-activation.json"
+    command = (f"node {script('activate-composer.mjs')} install --scope "
+               f"{shlex.quote(str(scope))}")
+    if not manifest.is_file():
+        # Legacy single-project init intentionally installs only project files;
+        # a wider scope must be chosen explicitly before touching shell startup.
+        status = "info" if scope == ROOT.resolve() else "issue"
+        return check("composer_activation", "Composer pre-send proxy", status,
+                     f"not activated for scope {scope}; selector keys cannot open configuration before send",
+                     manual=command)
+    node = shutil.which("node")
+    if not node:
+        return check("composer_activation", "Composer pre-send proxy", "skipped",
+                     f"activation manifest exists for {scope}, but node is unavailable")
+    proc = subprocess.run(
+        [node, str(PLUGIN_ROOT / "scripts/activate-composer.mjs"), "status",
+         "--scope", str(scope), "--json"],
+        capture_output=True, text=True, cwd=ROOT, check=False,
+    )
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        payload = {}
+    if proc.returncode == 0 and payload.get("ok") is True:
+        return check("composer_activation", "Composer pre-send proxy", "healthy",
+                     f"active for scope {scope}; applies to new interactive CLI sessions")
+    problems = payload.get("problems") if isinstance(payload.get("problems"), list) else []
+    detail = "; ".join(str(item) for item in problems) or (proc.stderr.strip() or "activation status failed")
+    return check("composer_activation", "Composer pre-send proxy", "issue",
+                 f"scope {scope}: {detail}", manual=command, restart_required=True)
 
 
 def check_stale_nested_symlinks() -> list[dict]:
@@ -1153,6 +1195,7 @@ def run(run_preflight: bool = True, boot_test: bool = False) -> dict:
     checks.extend(check_legacy_google())
     checks.extend(check_skills_links(enabled))
     checks.extend(check_dispatchers(enabled))
+    checks.append(check_composer_activation(enabled))
     checks.extend(check_stale_nested_symlinks())
     checks.append(check_cache_freshness())
     checks.extend(check_codex_artifacts(enabled))
