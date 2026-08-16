@@ -77,24 +77,8 @@ test("passive reference skills stay implicitly invocable", () => {
   }
 });
 
-test("the /codex prompt forbids delegating the task back to Claude", () => {
-  const command = fs.readFileSync(
-    path.join(PLUGIN_ROOT, "commands", "codex.md"),
-    "utf8"
-  );
-  assert.match(
-    command,
-    /This request already reached you by delegation from Claude Code/,
-    "commands/codex.md must carry the delegation boundary"
-  );
-  assert.match(
-    command,
-    /Do not invoke any \$claude-\* workspace skill/i,
-    "The preamble must tell Codex not to invoke a $claude configuration skill"
-  );
-  assert.match(
-    command,
-    /固定边界/,
-    "The delegation boundary must be a fixed prompt part"
-  );
+test("the Codex runner owns the no-return boundary", () => {
+  const runner = fs.readFileSync(path.join(PLUGIN_ROOT, "scripts", "codex-runner.mjs"), "utf8");
+  assert.match(runner, /withDelegationBoundary/);
+  assert.equal(fs.existsSync(path.join(PLUGIN_ROOT, "commands", "codex.md")), false);
 });

@@ -9,9 +9,12 @@ description: "Project instructions for the simple Claude Code ↔ Codex dispatch
 
 ## Product contract
 
-- Claude → Codex uses `/codex <plain-language task>`.
-- Codex → Claude starts by typing `$claude`, choosing a configuration candidate
-  in the composer, appending the plain-language task, and sending once.
+- Claude → Codex starts by typing `/codex`, choosing a `/codex-*`
+  configuration candidate in the composer, appending the plain-language task,
+  and sending once.
+- Codex → Claude starts by typing `$claude`, choosing a `$claude-*`
+  configuration candidate in the composer, appending the plain-language task,
+  and sending once.
 - Every dispatch requires an explicit pre-send configuration choice. Keep the
   candidates numbered as recent configuration, default configuration, then
   remaining models so the composer order is stable.
@@ -36,17 +39,21 @@ description: "Project instructions for the simple Claude Code ↔ Codex dispatch
 
 ## Core architecture
 
-- `commands/codex.md` is the canonical Claude-side dispatcher.
-- `scripts/install_dispatchers.sh` renders the literal project `/codex` shim and
-  uses a content hash to distinguish generated files from user edits.
+- `scripts/sync-projects.mjs` discovers actual project roots inside an explicit
+  scope and installs or removes only project-local dispatch artifacts.
+- `scripts/lib/project-dispatch.mjs` generates the ordered Claude-side
+  `/codex-*` choices, owns their hashes, and preserves collisions.
+- `scripts/install_dispatchers.sh` is the single-project compatibility wrapper
+  around the scoped synchronizer. There is intentionally no exact `/codex`
+  command because it would submit before configuration selection.
 - `skills/cc-suite/claude-*/` contains the ordered, explicit Codex-side
   `$claude` configuration candidates.
 - `scripts/dispatch-config.mjs` discovers capabilities, orders chooser profiles,
   validates choices, and stores per-project MRU state.
 - `scripts/lib/dispatch-config.mjs` contains the pure ordering/validation logic.
 - `scripts/codex-runner.mjs` provides the deadline-bounded Claude → Codex lane.
-- `scripts/mcp_claude.sh` registers the pinned `claude-octopus` server used by
-  `$claude`; the pin is `scripts/lib/claude-octopus-pin.txt`.
+- `scripts/claude-runner.mjs` provides the symmetric deadline-bounded
+  Codex → Claude lane. Normal dispatch does not require project MCP config.
 - `scripts/lib/delegation-boundary.mjs` prevents delegated agents from handing a
   task back to its author.
 
@@ -71,10 +78,12 @@ done
 
 After setup changes, initialize a temporary project twice and confirm:
 
-- `/codex` is generated and remains byte-identical on the second run;
+- `/codex-*` generated skills remain byte-identical on the second run;
 - `$claude` is visible through `.agents/skills`;
-- `.codex/config.toml` contains the current `claude-octopus` pin;
-- a user-owned or edited `.claude/commands/codex.md` is never overwritten.
+- project state resolves to the project marker while execution keeps the
+  user's active subdirectory;
+- a user-owned or edited `.claude/skills/codex-*` or legacy exact `/codex`
+  command is never overwritten.
 
 ## Release discipline
 

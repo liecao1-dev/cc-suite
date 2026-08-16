@@ -4,10 +4,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  CLAUDE_DELEGATION_BOUNDARY,
   DELEGATING_SKILLS,
   BOUNDARY_INVARIANTS,
   DELEGATION_BOUNDARY,
   withDelegationBoundary,
+  withClaudeDelegationBoundary,
 } from "../scripts/lib/delegation-boundary.mjs";
 
 const PLUGIN_ROOT = path.resolve(
@@ -88,21 +90,16 @@ test("the boundary is applied where the child is invoked, not where args parse",
   }
 });
 
-test("the /codex prompt keeps the same promise as the shared boundary", () => {
-  // The Claude command builds its prompt from prose, so it cannot import the
-  // module. Hold both to the same invariant sentences to stop them drifting.
-  const command = fs.readFileSync(
-    path.join(PLUGIN_ROOT, "commands", "codex.md"),
-    "utf8"
-  );
+test("both direct CLI runners apply the correct no-bounce boundary", () => {
+  const codexRunner = readScript("codex-runner.mjs");
+  const claudeRunner = readScript("claude-runner.mjs");
+  assert.match(codexRunner, /withDelegationBoundary\(args\.prompt\)/);
+  assert.match(claudeRunner, /withClaudeDelegationBoundary\(args\.prompt\)/);
   for (const sentence of BOUNDARY_INVARIANTS) {
-    assert.ok(
-      command.includes(sentence),
-      `commands/codex.md is missing the invariant sentence: ${sentence}`
-    );
+    assert.ok(DELEGATION_BOUNDARY.includes(sentence));
+    assert.ok(CLAUDE_DELEGATION_BOUNDARY.includes(sentence));
   }
-  assert.ok(
-    command.includes("$claude-*"),
-    "commands/codex.md should forbid every $claude configuration skill"
-  );
+  assert.match(DELEGATION_BOUNDARY, /\$claude-\*/);
+  assert.match(CLAUDE_DELEGATION_BOUNDARY, /\/codex-\*/);
+  assert.ok(withClaudeDelegationBoundary("task").endsWith("task"));
 });

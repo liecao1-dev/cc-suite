@@ -229,32 +229,22 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
         out.append(check("claude_dispatcher", "$claude skill", "expected_absent",
                          "Codex is not enabled"))
         return out
-    target = ROOT / ".claude/commands/codex.md"
-    text = _read(target)
-    marker = re.compile(
-        r"^<!-- cc-suite-dispatcher: codex sha256=([0-9a-f]{64}) -->$", re.M
-    )
-    if text is None:
-        out.append(check("codex_dispatcher", "/codex dispatcher", "issue",
-                         "missing .claude/commands/codex.md",
+    picker_root = ROOT / ".claude/skills"
+    picker_files = list(picker_root.glob("codex-*/SKILL.md")) if picker_root.is_dir() else []
+    managed_pickers = [
+        item for item in picker_files
+        if "<!-- cc-suite-managed-codex-skill sha256=" in (_read(item) or "")
+    ]
+    if len(managed_pickers) < 2:
+        out.append(check("codex_dispatcher", "/codex pre-send choices", "issue",
+                         f"only {len(managed_pickers)} managed configuration choice(s) visible",
                          auto=[f"bash {script('install_dispatchers.sh')}"]))
     else:
-        match = marker.search(text)
-        if not match:
-            out.append(check("codex_dispatcher", "/codex dispatcher", "info",
-                             "same-name user command preserved; use /cc-suite:codex"))
-        else:
-            start, end = match.span()
-            if end < len(text) and text[end] == "\n":
-                end += 1
-            body = text[:start] + text[end:]
-            actual = hashlib.sha256(body.encode("utf-8")).hexdigest()
-            if actual == match.group(1):
-                out.append(check("codex_dispatcher", "/codex dispatcher", "healthy",
-                                 "generated command is intact"))
-            else:
-                out.append(check("codex_dispatcher", "/codex dispatcher", "info",
-                                 "generated command was edited; preserved as user-owned"))
+        out.append(check("codex_dispatcher", "/codex pre-send choices", "healthy",
+                         f"{len(managed_pickers)} configuration choices visible before submission"))
+    if (ROOT / ".claude/commands/codex.md").is_file():
+        out.append(check("codex_exact_command", "/codex exact command", "info",
+                         "a user/legacy exact command is preserved and may hide the prefix chooser"))
 
     missing = []
     unsafe = []
@@ -481,43 +471,25 @@ def registered_octopus_version(config_text: str) -> str | None:
 
 
 def check_claude_code_registration(enabled: list[str]) -> dict:
-    if "codex" not in enabled:
-        return check("claude_code_reg", ".codex/config.toml → claude-code", "expected_absent",
-                     "Codex is not enabled")
-    text = _read(ROOT / ".codex/config.toml")
-    if text is None:
-        return check("claude_code_reg", ".codex/config.toml → claude-code", "issue",
-                     "no .codex/config.toml", auto=[f"bash {script('mcp_claude.sh')}"])
-    pin = expected_pin()
-    if CLAUDE_SENTINEL_OPEN in text:
-        start = text.find(CLAUDE_SENTINEL_OPEN)
-        end = text.find(CLAUDE_SENTINEL_CLOSE)
-        if end < start:
-            return check("claude_code_reg", ".codex/config.toml → claude-code", "issue",
-                         "cc-suite-claude-mcp sentinel block is unpaired/mangled",
-                         auto=[f"bash {script('mcp_claude.sh')}"])
-        block = text[start:end]
-        live = registered_octopus_version(text)
-        block_ok = ("[mcp_servers.claude-code]" in block
-                    and "tool_timeout_sec" in block
-                    and re.search(r'(?m)^\s*args\s*=.*claude-octopus@', block))
-        if pin and live == pin and block_ok:
-            return check("claude_code_reg", ".codex/config.toml → claude-code", "healthy",
-                         f"claude-code pinned @{pin}")
-        if pin and live == pin:
-            return check("claude_code_reg", ".codex/config.toml → claude-code", "issue",
-                         "pin matches but the managed block is incomplete "
-                         "(table, args, or tool_timeout_sec missing)",
-                         auto=[f"bash {script('mcp_claude.sh')}"])
-        return check("claude_code_reg", ".codex/config.toml → claude-code", "issue",
-                     f"claude-code pinned @{live or '?'} but the plugin expects @{pin or '?'}",
-                     auto=[f"bash {script('mcp_claude.sh')}"])
-    if re.search(r'^\s*\[mcp_servers\.(claude-code|"claude-code")\]\s*$', text, re.M):
-        return check("claude_code_reg", ".codex/config.toml → claude-code", "info",
-                     "claude-code registered by another source (not cc-suite-managed) — left alone")
-    return check("claude_code_reg", ".codex/config.toml → claude-code", "issue",
-                 "claude-code not registered — Codex cannot delegate to Claude",
-                 auto=[f"bash {script('mcp_claude.sh')}"])
+    if "claude" not in enabled:
+        return check("claude_code_reg", "Claude CLI dispatch backend", "expected_absent",
+                     "Claude is not enabled")
+    executable = shutil.which("claude")
+    if not executable:
+        return check("claude_code_reg", "Claude CLI dispatch backend", "issue",
+                     "claude CLI not found",
+                     manual="install and authenticate Claude Code, then run cc-suite repair")
+    try:
+        proc = subprocess.run([executable, "--version"], capture_output=True, text=True,
+                              timeout=10, cwd=ROOT)
+    except Exception as exc:  # noqa: BLE001
+        return check("claude_code_reg", "Claude CLI dispatch backend", "issue",
+                     f"could not run claude --version: {exc}")
+    if proc.returncode != 0:
+        return check("claude_code_reg", "Claude CLI dispatch backend", "issue",
+                     (proc.stderr or proc.stdout).strip()[:200])
+    return check("claude_code_reg", "Claude CLI dispatch backend", "healthy",
+                 (proc.stdout or proc.stderr).strip().splitlines()[0])
 
 
 def _codex_name(name: str) -> str:

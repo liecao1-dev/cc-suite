@@ -51,7 +51,7 @@ test("recent config is first, default config is second, remaining models follow"
   assert.equal(result.profiles[2].config.model, "gpt-fast");
 });
 
-test("identical recent and default configs merge without a duplicate row", () => {
+test("identical recent and default configs remain separate intent rows", () => {
   const same = { model: "gpt-new", effort: "medium", access: "workspace-write" };
   const result = buildDispatchProfiles({
     target: "codex",
@@ -61,11 +61,13 @@ test("identical recent and default configs merge without a duplicate row", () =>
   });
 
   assert.equal(result.profiles[0].id, "recent");
-  assert.deepEqual(result.profiles[0].badges, ["recent", "default"]);
-  assert.equal(result.profiles.filter((row) => row.config.model === "gpt-new").length, 1);
+  assert.deepEqual(result.profiles.slice(0, 2).map((row) => row.id), ["recent", "default"]);
+  assert.deepEqual(result.profiles[0].badges, ["recent"]);
+  assert.deepEqual(result.profiles[1].badges, ["default"]);
+  assert.equal(result.profiles.filter((row) => row.config.model === "gpt-new").length, 2);
 });
 
-test("a stale recent Codex model is omitted and reported", () => {
+test("a stale recent Codex model becomes a visible first-use fallback row", () => {
   const result = buildDispatchProfiles({
     target: "codex",
     recent: { model: "gpt-gone", effort: "medium", access: "workspace-write" },
@@ -74,7 +76,9 @@ test("a stale recent Codex model is omitted and reported", () => {
   });
 
   assert.equal(result.recentUnavailable, true);
-  assert.equal(result.profiles[0].id, "default");
+  assert.deepEqual(result.profiles.slice(0, 2).map((row) => row.id), ["recent", "default"]);
+  assert.deepEqual(result.profiles[0].config, result.profiles[1].config);
+  assert.match(result.profiles[0].label, /最近配置/);
 });
 
 test("other model rows use a supported effort", () => {
@@ -140,7 +144,7 @@ test("the CLI persists a Claude MRU and returns it before the default", () => {
   }
 });
 
-test("the CLI merges a recent configuration that exactly matches the default", () => {
+test("the CLI keeps recent and default separate even when tuples match", () => {
   const workspace = makeTempDir();
   try {
     runConfig(workspace, [
@@ -152,8 +156,10 @@ test("the CLI merges a recent configuration that exactly matches the default", (
     ]);
     const listed = runConfig(workspace, ["list", "--target", "claude"]);
     assert.equal(listed.profiles[0].id, "recent");
-    assert.deepEqual(listed.profiles[0].badges, ["recent", "default"]);
-    assert.equal(listed.profiles.filter((row) => row.config.model === "default").length, 1);
+    assert.deepEqual(listed.profiles.slice(0, 2).map((row) => row.id), ["recent", "default"]);
+    assert.deepEqual(listed.profiles[0].badges, ["recent"]);
+    assert.deepEqual(listed.profiles[1].badges, ["default"]);
+    assert.equal(listed.profiles.filter((row) => row.config.model === "default").length, 2);
   } finally {
     cleanupDir(workspace);
   }

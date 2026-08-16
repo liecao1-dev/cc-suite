@@ -209,20 +209,18 @@ else
   skip ".codex/config.toml already exists"
 fi
 
-# --- 6. Skills bridge -------------------------------------------------------
-bash "${SCRIPT_DIR}/bridge_skills.sh"
-
-# --- 7. Literal dispatcher commands ----------------------------------------
-# Plugin commands are namespaced by Claude Code. Install a safely-owned
-# project shim so the daily surface is the promised literal `/codex` when
-# Codex is enabled.
+# --- 6. Pre-send dispatch pickers ------------------------------------------
+# The project installer creates both sides at the actual project root:
+# `.agents/skills/claude-*` for Codex and `.claude/skills/codex-*` for Claude.
+# There is deliberately no exact `/codex` command: typing that prefix keeps the
+# composer open so the user chooses a configuration before sending.
 if tool_enabled codex; then
   bash "${SCRIPT_DIR}/install_dispatchers.sh"
 else
-  skip ".claude/commands/codex.md skipped — codex not enabled for this project"
+  skip "dispatch pickers skipped — codex not enabled for this project"
 fi
 
-# --- 8. .gitignore ----------------------------------------------------------
+# --- 7. .gitignore ----------------------------------------------------------
 # Delegates to scripts/ensure_gitignore.sh — same helper bridge_skills.sh
 # calls, so the block stays in sync when the user re-runs init or repair.
 # PRIVATE carries the --private flag.

@@ -37,6 +37,7 @@ import {
   waitForExit,
 } from "./lib/process.mjs";
 import { extractErrorEvent, resolveFailureMessage } from "./lib/codex-errors.mjs";
+import { withDelegationBoundary } from "./lib/delegation-boundary.mjs";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 const HEARTBEAT_MS = 30 * 1000;
@@ -199,7 +200,8 @@ function executeCodex(cwd, args, logFile) {
       os.tmpdir(),
       `codex-last-${process.pid}-${Date.now()}.txt`
     );
-    const codexArgs = buildCodexArgs(args, lastMessageFile);
+    const boundedArgs = { ...args, prompt: withDelegationBoundary(args.prompt) };
+    const codexArgs = buildCodexArgs(boundedArgs, lastMessageFile);
 
     appendLog(logFile, `Exec: codex ${codexArgs.slice(0, -1).join(" ")} <prompt>`);
     appendLog(logFile, `Model: ${args.model}, Effort: ${args.effort}, Sandbox: ${args.resume ? "(inherited via resume)" : args.sandbox}`);
@@ -375,14 +377,14 @@ function executeCodex(cwd, args, logFile) {
   });
 }
 
-async function runForeground(cwd, args) {
+async function runForeground(stateRoot, executionCwd, args) {
   const jobId = generateJobId(args.kind);
   activeJobId = jobId;
-  const logFile = createJobLogFile(cwd, jobId);
+  const logFile = createJobLogFile(stateRoot, jobId);
   const sessionId = args.sessionId || process.env.CODEX_TOOLKIT_SESSION_ID || null;
   const deadlineAt = new Date(Date.now() + args.timeoutMs).toISOString();
 
-  upsertJob(cwd, {
+  upsertJob(stateRoot, {
     id: jobId,
     kind: args.kind,
     status: "running",
@@ -397,16 +399,16 @@ async function runForeground(cwd, args) {
 
   appendLog(logFile, `Starting ${args.kind} task (foreground)`);
 
-  const result = await executeCodex(cwd, args, logFile);
+  const result = await executeCodex(executionCwd, args, logFile);
 
-  upsertJob(cwd, {
+  upsertJob(stateRoot, {
     id: jobId,
     status: result.status,
     threadId: result.threadId || null,
     completedAt: new Date().toISOString(),
     ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
   });
-  writeJobFile(cwd, jobId, {
+  writeJobFile(stateRoot, jobId, {
     rawOutput: result.rawOutput || "",
     threadId: result.threadId || null,
     ...(result.errorMessage ? { error: result.errorMessage } : {}),
@@ -424,13 +426,13 @@ async function runForeground(cwd, args) {
   if (result.status !== "completed") process.exitCode = 1;
 }
 
-function runBackground(cwd, args) {
+function runBackground(stateRoot, executionCwd, args) {
   const jobId = generateJobId(args.kind);
   activeJobId = jobId;
-  const logFile = createJobLogFile(cwd, jobId);
+  const logFile = createJobLogFile(stateRoot, jobId);
   const sessionId = args.sessionId || process.env.CODEX_TOOLKIT_SESSION_ID || null;
 
-  upsertJob(cwd, {
+  upsertJob(stateRoot, {
     id: jobId,
     kind: args.kind,
     status: "queued",
@@ -455,7 +457,7 @@ function runBackground(cwd, args) {
   childArgv.push("--", args.prompt);
 
   const child = spawn(process.execPath, childArgv, {
-    cwd,
+    cwd: executionCwd,
     detached: true,
     stdio: "ignore",
     env: {
@@ -468,7 +470,7 @@ function runBackground(cwd, args) {
   // fast worker completion can never be overwritten with `running` here.
   child.on("error", (err) => {
     appendLog(logFile, `Background spawn error: ${err.message}`);
-    upsertJob(cwd, {
+    upsertJob(stateRoot, {
       id: jobId,
       status: "failed",
       errorMessage: `Failed to start background worker: ${err.message}`,
@@ -483,12 +485,12 @@ function runBackground(cwd, args) {
   process.stdout.write(JSON.stringify(output) + "\n");
 }
 
-async function runBackgroundWorker(cwd, args, jobId) {
-  const logFile = createJobLogFile(cwd, jobId);
+async function runBackgroundWorker(stateRoot, executionCwd, args, jobId) {
+  const logFile = createJobLogFile(stateRoot, jobId);
   // Claim the queued job atomically. SessionEnd can cancel a job in the gap
   // between queueing and worker startup; resurrecting it to running would
   // leave a process nobody is tracking.
-  const claimed = claimJob(cwd, jobId, {
+  const claimed = claimJob(stateRoot, jobId, {
     status: "running",
     pid: process.pid,
     pidStartedAt: readProcessStartTime(process.pid),
@@ -501,16 +503,16 @@ async function runBackgroundWorker(cwd, args, jobId) {
   }
   appendLog(logFile, "Background worker started");
 
-  const result = await executeCodex(cwd, args, logFile);
+  const result = await executeCodex(executionCwd, args, logFile);
 
-  upsertJob(cwd, {
+  upsertJob(stateRoot, {
     id: jobId,
     status: result.status,
     threadId: result.threadId || null,
     completedAt: new Date().toISOString(),
     ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
   });
-  writeJobFile(cwd, jobId, {
+  writeJobFile(stateRoot, jobId, {
     rawOutput: result.rawOutput || "",
     threadId: result.threadId || null,
     ...(result.errorMessage ? { error: result.errorMessage } : {}),
@@ -525,19 +527,20 @@ async function main() {
     process.exit(1);
   }
 
-  const cwd = resolveWorkspaceRoot(process.cwd());
+  const executionCwd = process.cwd();
+  const stateRoot = resolveWorkspaceRoot(executionCwd);
 
   // Detached background worker spawned by runBackground: do the actual work.
   const backgroundJobId = process.env.CODEX_TOOLKIT_BACKGROUND_JOB_ID;
   if (backgroundJobId) {
-    await runBackgroundWorker(cwd, args, backgroundJobId);
+    await runBackgroundWorker(stateRoot, executionCwd, args, backgroundJobId);
     return;
   }
 
   if (args.background) {
-    runBackground(cwd, args);
+    runBackground(stateRoot, executionCwd, args);
   } else {
-    await runForeground(cwd, args);
+    await runForeground(stateRoot, executionCwd, args);
   }
 }
 

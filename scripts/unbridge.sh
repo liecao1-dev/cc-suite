@@ -622,4 +622,4 @@ if [ "$UNBRIDGE_FAILED" = "1" ]; then
   warn "cc-suite unbridge finished with errors — see messages above."
   exit 1
 fi
-ok "cc-suite unbridge complete. .mcp.json and .claude/ are left alone."
+ok "cc-suite unbridge complete. Only a recognizable legacy codex-cli entry may be removed from .mcp.json; other MCP and .claude/ content are preserved."

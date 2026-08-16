@@ -104,16 +104,18 @@ for _skill_name in "${CLAUDE_SKILL_NAMES[@]}"; do
   fi
 done
 
-# Literal daily dispatcher installed by init.sh. A user-owned collision is a
-# warning rather than something cc-suite overwrites.
-if [ -f .claude/commands/codex.md ]; then
-  if grep -q '^<!-- cc-suite-dispatcher: codex sha256=' .claude/commands/codex.md; then
-    mark "/codex dispatcher" ok ".claude/commands/codex.md"
-  else
-    mark "/codex dispatcher" warn "same-name user command preserved — use /cc-suite:codex"
-  fi
+# Multiple `/codex-*` skills keep the composer open for a pre-send choice.
+_codex_picker_count=0
+if [ -d .claude/skills ]; then
+  _codex_picker_count="$(find .claude/skills -maxdepth 2 -path '*/codex-*/SKILL.md' -type f -exec grep -l '^<!-- cc-suite-managed-codex-skill sha256=' {} \; 2>/dev/null | wc -l | tr -d ' ')"
+fi
+if [ "${_codex_picker_count:-0}" -ge 2 ]; then
+  mark "/codex pre-send choices" ok "${_codex_picker_count} configurations"
 else
-  mark "/codex dispatcher" miss "run /cc-suite:init"
+  mark "/codex pre-send choices" miss "run /cc-suite:repair"
+fi
+if [ -f .claude/commands/codex.md ]; then
+  mark "/codex exact command" warn "user/legacy command may hide the pre-send chooser"
 fi
 
 # .codex
@@ -207,30 +209,15 @@ else
   mark ".mcp.json" miss
 fi
 
-# .codex/config.toml — claude-code (claude-octopus) registration
-_pin_file="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/scripts/lib/claude-octopus-pin.txt"
-_expected_pin="$(tr -d '[:space:]' < "$_pin_file" 2>/dev/null || echo unknown)"
-if ! tool_enabled codex; then
-  mark ".codex/config.toml → Codex" miss "(Codex is not enabled)"
-elif [ -f .codex/config.toml ]; then
-  if grep -qF ">>> cc-suite-claude-mcp >>>" .codex/config.toml; then
-    # Scope the pin comparison to the cc-suite-claude-mcp sentinel block:
-    # advisor-agent blocks also reference claude-octopus@<pin> and a whole-file
-    # grep would let a current-pin advisor mask a stale claude-code block.
-    _claude_block="$(sed -n '/>>> cc-suite-claude-mcp >>>/,/<<< cc-suite-claude-mcp <<</p' .codex/config.toml)"
-    if printf '%s' "$_claude_block" | grep -qF "claude-octopus@${_expected_pin}"; then
-      mark ".codex/config.toml → Codex" ok   "claude-code pinned @${_expected_pin}"
-    else
-      _live_pin=$(printf '%s' "$_claude_block" | grep -oE 'claude-octopus@[0-9][^"]*' | head -1)
-      mark ".codex/config.toml → Codex" warn "claude-code pinned @${_live_pin:-?} but plugin expects @${_expected_pin} — run /cc-suite:update"
-    fi
-  elif grep -qE '^[[:space:]]*\[mcp_servers\.(claude-code|"claude-code")\][[:space:]]*$' .codex/config.toml; then
-    mark ".codex/config.toml → Codex" warn "claude-code registered by another source (not cc-suite-managed)"
-  else
-    mark ".codex/config.toml → Codex" miss "claude-code not registered (run /cc-suite:init step 9)"
-  fi
+# `$claude-*` now calls the authenticated Claude CLI directly; no project MCP
+# registration is needed or expected.
+if tool_enabled claude && command -v claude >/dev/null 2>&1; then
+  _claude_version="$(claude --version 2>/dev/null | head -1 | tr -d '\r')"
+  mark "Claude CLI dispatch backend" ok "${_claude_version:-version unknown}"
+elif tool_enabled claude; then
+  mark "Claude CLI dispatch backend" miss "claude not found"
 else
-  mark ".codex/config.toml → Codex" miss "(run /cc-suite:init)"
+  mark "Claude CLI dispatch backend" miss "(Claude is not enabled)"
 fi
 
 # .cc-suite/agents — declared advisor agents. Compare exact NAMES, not counts:

@@ -19,9 +19,9 @@
 //      the calling command,
 //      because it has to hold on every call — foreground, background, resume.
 //
-// The /codex command assembles its preamble from prose in commands/codex.md
-// instead of calling this module. BOUNDARY_INVARIANTS exists so a test can hold
-// that copy and this one to the same promise.
+// Both CLI runners apply their boundary at the child-process edge. Generated
+// picker skills therefore pass only the user's task and cannot accidentally
+// omit, duplicate, or weaken the no-bounce rule.
 
 // Skills whose whole purpose is to delegate to Claude Code.
 export const DELEGATING_SKILLS = Object.freeze([
@@ -57,6 +57,14 @@ export const DELEGATION_BOUNDARY = [
   INVARIANT_NO_RETURN_TO_AUTHOR,
 ].join(" ");
 
+export const CLAUDE_DELEGATION_BOUNDARY = [
+  "This request already reached you by delegation from OpenAI Codex.",
+  INVARIANT_WORKER_NOT_ROUTER,
+  "Perform the task yourself and return the result directly.",
+  "Do not invoke any /codex-* workspace skill or otherwise hand the task back to Codex.",
+  INVARIANT_NO_RETURN_TO_AUTHOR,
+].join(" ");
+
 /**
  * Prefix a delegated prompt with the boundary.
  *
@@ -70,4 +78,9 @@ export const DELEGATION_BOUNDARY = [
 export function withDelegationBoundary(prompt) {
   if (!prompt || !prompt.trim()) return DELEGATION_BOUNDARY;
   return `${DELEGATION_BOUNDARY}\n\n${prompt}`;
+}
+
+export function withClaudeDelegationBoundary(prompt) {
+  if (!prompt || !prompt.trim()) return CLAUDE_DELEGATION_BOUNDARY;
+  return `${CLAUDE_DELEGATION_BOUNDARY}\n\n${prompt}`;
 }

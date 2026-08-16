@@ -2,10 +2,5 @@ interface:
   display_name: "Claude 4｜派遣｜Opus"
   short_description: "opus · medium · permission=default"
   default_prompt: "使用 $claude-4-opus，以 Claude Opus 配置派遣我接下来写的任务。"
-dependencies:
-  tools:
-    - type: "mcp"
-      value: "claude-code"
-      description: "The cc-suite managed claude-octopus MCP server."
 policy:
   allow_implicit_invocation: false

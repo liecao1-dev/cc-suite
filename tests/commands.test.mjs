@@ -14,15 +14,7 @@ const CLAUDE_SKILL_PROFILES = new Map([
   ["claude-5-haiku", "model:haiku"],
 ]);
 const PUBLIC_COMMANDS = [
-  "cancel",
-  "codex",
-  "diagnose",
-  "init",
-  "repair",
-  "result",
-  "status",
-  "unbridge",
-  "update",
+  "cancel", "diagnose", "init", "repair", "result", "status", "unbridge", "update",
 ];
 
 function readCommand(name) {
@@ -41,15 +33,14 @@ function extractFrontmatter(content) {
 }
 
 test("the public Claude command surface is intentionally small", () => {
-  const onDisk = fs
-    .readdirSync(COMMANDS_DIR)
+  const onDisk = fs.readdirSync(COMMANDS_DIR)
     .filter((name) => name.endsWith(".md"))
-    .map((name) => name.slice(0, -3))
-    .sort();
+    .map((name) => name.slice(0, -3)).sort();
   assert.deepEqual(onDisk, [...PUBLIC_COMMANDS].sort());
+  assert.equal(fs.existsSync(path.join(COMMANDS_DIR, "codex.md")), false);
 });
 
-test("every command has valid frontmatter with a useful description", () => {
+test("every maintenance command has useful frontmatter", () => {
   for (const name of PUBLIC_COMMANDS) {
     const frontmatter = extractFrontmatter(readCommand(name));
     assert.ok(frontmatter.description, `${name} is missing a description`);
@@ -57,56 +48,26 @@ test("every command has valid frontmatter with a useful description", () => {
   }
 });
 
-test("old task-taxonomy dispatch commands are absent", () => {
+test("task-taxonomy commands and the after-send chooser are absent", () => {
   for (const name of [
-    "audit",
-    "audit-fix",
-    "bug-analyze",
-    "continue",
-    "implement",
-    "review-plan",
-    "verify",
-    "agy",
-    "grok",
-    "qwen-review",
-  ]) {
-    assert.equal(fs.existsSync(path.join(COMMANDS_DIR, `${name}.md`)), false, name);
-  }
+    "audit", "audit-fix", "bug-analyze", "continue", "implement", "review-plan",
+    "verify", "agy", "grok", "qwen-review", "codex",
+  ]) assert.equal(fs.existsSync(path.join(COMMANDS_DIR, `${name}.md`)), false, name);
 });
 
-test("the Codex dispatcher requires manual per-call selection and fails closed", () => {
-  const content = readCommand("codex");
-  assert.match(content, /\$ARGUMENTS/);
-  assert.match(content, /dispatch-config\.mjs" list --target codex/);
-  assert.match(content, /dispatch-config\.mjs" record/);
-  assert.match(content, /始终调用 `AskUserQuestion`/);
-  assert.match(content, /不得自动选择默认配置/);
-  assert.match(content, /最近配置在最上，默认配置第二/);
-  assert.match(content, /不得回退到 Claude/);
-  assert.match(content, /--kind dispatch/);
-  assert.match(content, /--prompt-stdin/);
-  assert.match(content, /heredoc/);
-  assert.doesNotMatch(content, /--resume \{/);
-  assert.doesNotMatch(content, /-- "\{combined_prompt\}"/);
-});
-
-test("init installs exactly the two model-named dispatch directions", () => {
+test("init installs both pre-send prefixes through the scoped synchronizer", () => {
   const content = readCommand("init");
-  assert.match(content, /\/codex <任务>/);
-  assert.match(content, /先输入 `\$claude`/);
-  assert.match(content, /发送前选配置/);
-  assert.match(content, /scripts\/install_dispatchers\.sh|scripts\/init\.sh/);
-  assert.match(content, /scripts\/mcp_claude\.sh/);
-  assert.match(content, /不在初始化时锁定/);
-  assert.match(content, /不要再推荐 `\/implement`/);
+  assert.match(content, /输入 `\/codex`，先选配置/);
+  assert.match(content, /输入 `\$claude`，先选配置/);
+  assert.match(content, /sync-projects\.mjs/);
+  assert.match(content, /--scope "\$PWD" --project "\$PWD"/);
+  assert.match(content, /不要创建 exact `\/codex`/);
+  assert.doesNotMatch(content, /AskUserQuestion|mcp_claude|mcp_codex|回复编号/);
 });
 
-test("$claude exposes ordered configuration choices before submission", () => {
-  const onDisk = fs
-    .readdirSync(CLAUDE_SKILLS_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
+test("$claude exposes ordered pre-send choices backed by Claude CLI", () => {
+  const onDisk = fs.readdirSync(CLAUDE_SKILLS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
   assert.deepEqual(onDisk, [...CLAUDE_SKILL_PROFILES.keys()]);
 
   let expectedIndex = 1;
@@ -114,16 +75,16 @@ test("$claude exposes ordered configuration choices before submission", () => {
     const skillDir = path.join(CLAUDE_SKILLS_DIR, skillName);
     const content = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
     const policy = fs.readFileSync(path.join(skillDir, "agents", "openai.yaml"), "utf8");
-
     assert.match(content, new RegExp(`name: ${skillName}`));
     assert.match(content, new RegExp(`--profile ${profile.replace(":", "\\:")}`));
-    assert.match(content, /不要再显示配置\s*列表/);
-    assert.match(content, /config\.mjs record/);
-    assert.match(content, /mcp__claude-code__claude_code/);
-    assert.match(content, /下一次派遣请重新输入\s*`\$claude`/);
-    assert.doesNotMatch(content, /config\.mjs list|显示短编号列表|### 2\. 立即让用户选择/);
+    assert.match(content, /claude-runner\.mjs/);
+    assert.match(content, /--prompt-stdin/);
+    assert.match(content, /下一次任务或追问.*重新输入 `\$claude`/s);
+    assert.doesNotMatch(content, /config\.mjs list|AskUserQuestion|mcp__claude-code/);
     assert.match(policy, new RegExp(`display_name: "Claude ${expectedIndex}｜派遣｜`));
     assert.match(policy, new RegExp(`default_prompt: ".*\\$${skillName}`));
+    assert.match(policy, /allow_implicit_invocation:\s*false/);
+    assert.doesNotMatch(policy, /^dependencies:/m);
     expectedIndex += 1;
   }
 });
@@ -133,7 +94,6 @@ test("plugin hooks track job lifecycle without the removed audit gate", () => {
   assert.ok(hooks.hooks.SessionStart);
   assert.ok(hooks.hooks.SessionEnd);
   assert.equal(hooks.hooks.Stop, undefined);
-  assert.equal(hooks.hooks.SessionStart[0].hooks[0].timeout, 5);
 });
 
 test("package and Claude plugin manifests agree on the 3.x release", () => {

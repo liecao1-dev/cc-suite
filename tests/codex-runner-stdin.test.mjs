@@ -57,7 +57,10 @@ printf '%s\n' '{"type":"thread.started","thread_id":"12345678-1234-1234-1234-123
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).status, "completed");
-    assert.equal(fs.readFileSync(capture, "utf8"), prompt);
+    const captured = fs.readFileSync(capture, "utf8");
+    assert.match(captured, /^This request already reached you by delegation from Claude Code\./);
+    assert.ok(captured.endsWith(prompt));
+    assert.equal(captured.match(/This request already reached you/g)?.length, 1);
     assert.equal(fs.existsSync(path.join(workspace, "should-not-run")), false);
   } finally {
     cleanupDir(workspace);

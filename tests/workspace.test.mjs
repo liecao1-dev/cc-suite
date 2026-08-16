@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 
 import { makeTempDir, initGitRepo, cleanupDir } from "./helpers.mjs";
 import { resolveWorkspaceRoot } from "../scripts/lib/workspace.mjs";
@@ -24,4 +26,20 @@ test("resolveWorkspaceRoot returns cwd for non-git directories", () => {
   } finally {
     cleanupDir(dir);
   }
+});
+
+test("a nearest cc-suite marker wins over a broader parent git repository", () => {
+  const dir = makeTempDir();
+  try {
+    initGitRepo(dir);
+    const project = path.join(dir, "projects", "app");
+    const nested = path.join(project, "packages", "web");
+    fs.mkdirSync(path.join(project, ".cc-suite"), { recursive: true });
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(project, ".cc-suite", "project.json"), JSON.stringify({
+      schema: 1,
+      managedBy: "cc-suite",
+    }));
+    assert.equal(resolveWorkspaceRoot(nested), project);
+  } finally { cleanupDir(dir); }
 });

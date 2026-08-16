@@ -10,56 +10,76 @@ const PLUGIN_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname)
 const installScript = path.join(PLUGIN_ROOT, "scripts", "install_dispatchers.sh");
 const uninstallScript = path.join(PLUGIN_ROOT, "scripts", "uninstall_dispatchers.sh");
 
-function run(script, cwd) {
-  return spawnSync("bash", [script], { cwd, encoding: "utf8" });
+function fixture(workspace) {
+  const file = path.join(workspace, "catalog.json");
+  fs.writeFileSync(file, JSON.stringify({
+    models: ["gpt-new", "gpt-fast"],
+    modelsDetail: [
+      { slug: "gpt-new", display_name: "GPT New", reasoning_efforts: ["medium", "high"] },
+      { slug: "gpt-fast", display_name: "GPT Fast", reasoning_efforts: ["low", "medium"] },
+    ],
+    efforts: ["low", "medium", "high"],
+    access: ["read-only", "workspace-write", "danger-full-access"],
+    defaultModel: "gpt-new",
+  }), "utf8");
+  return file;
 }
 
-test("installer creates an idempotent literal /codex command with a resolved plugin path", () => {
+function run(script, cwd, catalog = null) {
+  return spawnSync("bash", [script], {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, ...(catalog ? { CC_SUITE_CODEX_CATALOG_FILE: catalog } : {}) },
+  });
+}
+
+test("installer creates ordered /codex-* skills and $claude links idempotently", () => {
   const workspace = makeTempDir();
   try {
-    const first = run(installScript, workspace);
+    const catalog = fixture(workspace);
+    const first = run(installScript, workspace, catalog);
     assert.equal(first.status, 0, first.stderr);
-    const target = path.join(workspace, ".claude", "commands", "codex.md");
-    const content = fs.readFileSync(target, "utf8");
-    assert.match(content, /cc-suite-dispatcher: codex sha256=/);
-    assert.ok(content.includes(path.join(PLUGIN_ROOT, "scripts", "dispatch-config.mjs")));
-    assert.doesNotMatch(content, /\$\{CLAUDE_PLUGIN_ROOT\}/);
+    const recent = path.join(workspace, ".claude", "skills", "codex-1-recent", "SKILL.md");
+    const defaultSkill = path.join(workspace, ".claude", "skills", "codex-2-default", "SKILL.md");
+    const other = path.join(workspace, ".claude", "skills", "codex-3-gpt-fast", "SKILL.md");
+    const content = fs.readFileSync(recent, "utf8");
+    assert.equal(fs.existsSync(defaultSkill), true);
+    assert.equal(fs.existsSync(other), true);
+    assert.match(content, /cc-suite-managed-codex-skill sha256=/);
+    assert.ok(content.includes(path.join(PLUGIN_ROOT, "scripts", "codex-runner.mjs")));
+    assert.equal(fs.existsSync(path.join(workspace, ".claude", "commands", "codex.md")), false);
+    assert.equal(fs.lstatSync(path.join(workspace, ".agents", "skills", "claude-1-recent")).isSymbolicLink(), true);
 
-    const second = run(installScript, workspace);
+    const second = run(installScript, workspace, catalog);
     assert.equal(second.status, 0, second.stderr);
-    assert.equal(fs.readFileSync(target, "utf8"), content);
-  } finally {
-    cleanupDir(workspace);
-  }
+    assert.equal(fs.readFileSync(recent, "utf8"), content);
+  } finally { cleanupDir(workspace); }
 });
 
-test("installer and uninstaller preserve a dispatcher edited by the user", () => {
+test("installer and uninstaller preserve an edited generated skill", () => {
   const workspace = makeTempDir();
   try {
-    assert.equal(run(installScript, workspace).status, 0);
-    const target = path.join(workspace, ".claude", "commands", "codex.md");
+    const catalog = fixture(workspace);
+    assert.equal(run(installScript, workspace, catalog).status, 0);
+    const target = path.join(workspace, ".claude", "skills", "codex-3-gpt-fast", "SKILL.md");
     fs.appendFileSync(target, "\nUser customization.\n", "utf8");
-
-    const installAgain = run(installScript, workspace);
-    assert.equal(installAgain.status, 0);
+    const installAgain = run(installScript, workspace, catalog);
+    assert.notEqual(installAgain.status, 0);
     assert.match(fs.readFileSync(target, "utf8"), /User customization/);
-
     const uninstall = run(uninstallScript, workspace);
-    assert.equal(uninstall.status, 0, uninstall.stderr);
+    assert.notEqual(uninstall.status, 0);
     assert.equal(fs.existsSync(target), true);
-  } finally {
-    cleanupDir(workspace);
-  }
+  } finally { cleanupDir(workspace); }
 });
 
-test("uninstaller removes an unchanged generated dispatcher", () => {
+test("uninstaller removes unchanged managed pickers and links", () => {
   const workspace = makeTempDir();
   try {
-    assert.equal(run(installScript, workspace).status, 0);
-    const target = path.join(workspace, ".claude", "commands", "codex.md");
+    const catalog = fixture(workspace);
+    assert.equal(run(installScript, workspace, catalog).status, 0);
     assert.equal(run(uninstallScript, workspace).status, 0);
-    assert.equal(fs.existsSync(target), false);
-  } finally {
-    cleanupDir(workspace);
-  }
+    assert.equal(fs.existsSync(path.join(workspace, ".claude", "skills", "codex-1-recent")), false);
+    assert.equal(fs.existsSync(path.join(workspace, ".agents", "skills", "claude-1-recent")), false);
+    assert.equal(fs.existsSync(path.join(workspace, ".cc-suite", "project.json")), false);
+  } finally { cleanupDir(workspace); }
 });

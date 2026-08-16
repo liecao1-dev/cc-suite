@@ -1,35 +1,17 @@
 ---
-description: 幂等修复 Claude ↔ Codex 的两个派遣入口和底层 MCP、skills、hooks 配置
+description: 重新同步当前项目的 /codex 与 $claude 发送前候选
+allowed-tools:
+  - Bash
 ---
 
-# cc-suite repair
+# 修复当前项目派遣入口
 
-只修复 Claude ↔ Codex 核心通道。按顺序运行全部命令；单步失败时记录错误并继续，
-最后统一报告失败项：
-
-```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/init.sh"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/bridge_skills.sh"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/install_dispatchers.sh"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/mcp_codex.sh"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/mcp_claude.sh"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/bridge_mcp.sh"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/bridge_hooks.py"
-```
-
-然后运行：
+运行：
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/status.sh"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-projects.mjs" sync \
+  --scope "$PWD" --project "$PWD" --source "${CLAUDE_PLUGIN_ROOT}"
 ```
 
-核心成功条件：
-
-- `.claude/commands/codex.md` 是 cc-suite 生成的 `/codex`，或用户同名文件被保留
-  且 `/cc-suite:codex` 可用；
-- `.agents/skills/claude-{1..5}-*/SKILL.md` 的 5 个配置入口均可读；
-- `.codex/config.toml` 含 `cc-suite-claude-mcp`；
-- `codex` CLI 可用。
-
-成功时只说“Claude ↔ Codex 派遣已修复，请新开对话重新扫描入口”。失败时逐项给出
-原始错误，不要回退到旧任务型命令。
+报告创建、更新、移除和冲突项。用户拥有的 `.agents`、`.claude` 内容必须保留；
+失败时不要回退到消息发送后的编号选择。

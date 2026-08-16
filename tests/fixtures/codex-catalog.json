@@ -1,0 +1,18 @@
+{
+  "models": ["gpt-test-default", "gpt-test-fast"],
+  "modelsDetail": [
+    {
+      "slug": "gpt-test-default",
+      "display_name": "GPT Test Default",
+      "reasoning_efforts": ["medium", "high"]
+    },
+    {
+      "slug": "gpt-test-fast",
+      "display_name": "GPT Test Fast",
+      "reasoning_efforts": ["low", "medium"]
+    }
+  ],
+  "efforts": ["low", "medium", "high"],
+  "access": ["read-only", "workspace-write", "danger-full-access"],
+  "defaultModel": "gpt-test-default"
+}

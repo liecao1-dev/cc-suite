@@ -6,6 +6,8 @@
 set -euo pipefail
 
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
+CC_SUITE_CODEX_CATALOG_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/codex-catalog.json"
+export CC_SUITE_CODEX_CATALOG_FILE
 PASS=0
 FAIL=0
 declare -a ERRORS=()
@@ -145,8 +147,10 @@ assert_file_content "CLAUDE.md" "@AGENTS.md"
 assert_dir  ".codex/prompts"
 assert_file ".codex/prompts/.gitkeep"
 assert_file ".codex/config.toml"
-assert_file ".claude/commands/codex.md"
-assert_contains ".claude/commands/codex.md" "cc-suite-dispatcher: codex sha256="
+assert_no_file ".claude/commands/codex.md"
+assert_file ".claude/skills/codex-1-recent/SKILL.md"
+assert_file ".claude/skills/codex-2-default/SKILL.md"
+assert_file ".claude/skills/codex-3-gpt-test-fast/SKILL.md"
 for _claude_skill in claude-1-recent claude-2-default claude-3-sonnet claude-4-opus claude-5-haiku; do
   assert_file ".agents/skills/${_claude_skill}/SKILL.md"
 done
@@ -231,16 +235,16 @@ make_tmp
 
 assert_exit0 bash "$SCRIPTS/init.sh"
 hash1="$(md5 -q AGENTS.md 2>/dev/null || md5sum AGENTS.md | awk '{print $1}')"
-dispatcher_hash1="$(md5 -q .claude/commands/codex.md 2>/dev/null || md5sum .claude/commands/codex.md | awk '{print $1}')"
+dispatcher_hash1="$(md5 -q .claude/skills/codex-1-recent/SKILL.md 2>/dev/null || md5sum .claude/skills/codex-1-recent/SKILL.md | awk '{print $1}')"
 
 assert_exit0 bash "$SCRIPTS/init.sh"
 hash2="$(md5 -q AGENTS.md 2>/dev/null || md5sum AGENTS.md | awk '{print $1}')"
-dispatcher_hash2="$(md5 -q .claude/commands/codex.md 2>/dev/null || md5sum .claude/commands/codex.md | awk '{print $1}')"
+dispatcher_hash2="$(md5 -q .claude/skills/codex-1-recent/SKILL.md 2>/dev/null || md5sum .claude/skills/codex-1-recent/SKILL.md | awk '{print $1}')"
 
 if [ "$hash1" = "$hash2" ]; then ok_msg "AGENTS.md unchanged on re-run"
 else                              fail_msg "AGENTS.md changed on re-run"; fi
-if [ "$dispatcher_hash1" = "$dispatcher_hash2" ]; then ok_msg "/codex dispatcher unchanged on re-run"
-else                                                        fail_msg "/codex dispatcher changed on re-run"; fi
+if [ "$dispatcher_hash1" = "$dispatcher_hash2" ]; then ok_msg "/codex picker unchanged on re-run"
+else                                                        fail_msg "/codex picker changed on re-run"; fi
 
 assert_count "# >>> cc-suite >>>" ".gitignore" 1
 
@@ -251,7 +255,7 @@ make_tmp
 
 mkdir -p .claude/commands
 printf '%s\n' '---' 'description: user command' '---' 'Keep me.' > .claude/commands/codex.md
-assert_exit0 bash "$SCRIPTS/init.sh"
+assert_exit_nonzero bash "$SCRIPTS/init.sh"
 assert_contains ".claude/commands/codex.md" "Keep me."
 assert_not_contains ".claude/commands/codex.md" "cc-suite-dispatcher: codex"
 
@@ -2427,20 +2431,25 @@ checks = {c["id"]: c for c in d["checks"]}
 assert d["summary"]["issue"] > 0
 assert checks["agents_md"]["status"] == "issue"
 assert checks["agents_md"]["fix"]["auto"], "agents_md must carry an auto fix"
-assert checks["claude_skills_link"]["status"] == "issue"
+for skill in ("claude-1-recent", "claude-2-default", "claude-3-sonnet", "claude-4-opus", "claude-5-haiku"):
+    assert checks[f"claude_skills_link:{skill}"]["status"] == "issue"
 PY
 cleanup
 
 section "T76b: diagnose.py — disabled tools classify as expected_absent, not issues"
 make_tmp
 printf '## Enabled Tools\n- [x] claude\n' > .cc-suite.md
-mkdir -p "$TMP/fakehome"; HOME="$TMP/fakehome" python3 "$SCRIPTS/diagnose.py" --json --no-preflight > diag.json 2>/dev/null || true
+mkdir -p "$TMP/fakehome" "$TMP/bin"
+printf '#!/bin/sh\nprintf "2.1.233 (Claude Code)\\n"\n' > "$TMP/bin/claude"
+chmod +x "$TMP/bin/claude"
+HOME="$TMP/fakehome" PATH="$TMP/bin:$PATH" python3 "$SCRIPTS/diagnose.py" --json --no-preflight > diag.json 2>/dev/null || true
 python3 - <<'PY' && ok_msg "codex/agy checks are expected_absent when disabled" || fail_msg "disabled-tools classification failed"
 import json
 d = json.load(open("diag.json"))
 checks = {c["id"]: c for c in d["checks"]}
-for cid in ("codex_artifacts", "mcp_codex_cli", "claude_code_reg", "mcp_parity", "agy_mcp", "codex_runtime", "agents_skills_link", "codex_dispatcher", "claude_dispatcher"):
+for cid in ("codex_artifacts", "mcp_codex_cli", "mcp_parity", "agy_mcp", "codex_runtime", "agents_skills_link", "codex_dispatcher", "claude_dispatcher"):
     assert checks[cid]["status"] == "expected_absent", f"{cid}: {checks[cid]['status']}"
+assert checks["claude_code_reg"]["status"] == "healthy"
 PY
 cleanup
 
@@ -2453,14 +2462,20 @@ bash "$SCRIPTS/bridge_skills.sh" >/dev/null 2>&1
 bash "$SCRIPTS/mcp_codex.sh"     >/dev/null 2>&1
 bash "$SCRIPTS/mcp_claude.sh"    >/dev/null 2>&1
 bash "$SCRIPTS/bridge_mcp.sh"    >/dev/null 2>&1
-mkdir -p "$TMP/fakehome"; HOME="$TMP/fakehome" python3 "$SCRIPTS/diagnose.py" --json --no-preflight > diag.json 2>/dev/null || true
+mkdir -p "$TMP/fakehome" "$TMP/bin"
+printf '#!/bin/sh\nprintf "2.1.233 (Claude Code)\\n"\n' > "$TMP/bin/claude"
+chmod +x "$TMP/bin/claude"
+HOME="$TMP/fakehome" PATH="$TMP/bin:$PATH" python3 "$SCRIPTS/diagnose.py" --json --no-preflight > diag.json 2>/dev/null || true
 python3 - <<'PY' && ok_msg "initialized project: bridge checks healthy, latest policy healthy" || fail_msg "initialized-project assertions failed"
 import json
 d = json.load(open("diag.json"))
 checks = {c["id"]: c for c in d["checks"]}
-for cid in ("agents_md", "claude_md", "claude_skills_link", "agents_skills_link",
+for cid in ("agents_md", "claude_md", "agents_skills_link",
             "codex_dispatcher", "claude_dispatcher", "codex_config", "mcp_codex_cli",
             "claude_code_reg", "gitignore"):
+    assert checks[cid]["status"] == "healthy", f"{cid}: {checks[cid]['status']} — {checks[cid]['detail']}"
+for skill in ("claude-1-recent", "claude-2-default", "claude-3-sonnet", "claude-4-opus", "claude-5-haiku"):
+    cid = f"claude_skills_link:{skill}"
     assert checks[cid]["status"] == "healthy", f"{cid}: {checks[cid]['status']} — {checks[cid]['detail']}"
 assert d["summary"].get("issue", 0) == 0, d["summary"]
 PY
@@ -2494,30 +2509,18 @@ PY
 cleanup
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# T75  status.sh — advisor block with the current pin must not mask a stale claude-code pin
+# T75  status.sh — direct Claude CLI backend replaces the project MCP pin
 # ═══════════════════════════════════════════════════════════════════════════════
-section "T75: status.sh — stale claude-code pin flagged despite current-pin advisor block"
+section "T75: status.sh — reports the direct Claude CLI dispatch backend"
 make_tmp
-_current_pin="$(tr -d '[:space:]' < "$SCRIPTS/lib/claude-octopus-pin.txt")"
-mkdir -p .codex
-cat > .codex/config.toml <<TOML
-# >>> cc-suite-claude-mcp >>>
-[mcp_servers.claude-code]
-command = "npx"
-args = ["-y", "claude-octopus@0.0.1"]
-# <<< cc-suite-claude-mcp <<<
-
-# >>> cc-suite-agent: advisor >>>
-[mcp_servers.advisor]
-command = "npx"
-args = ["-y", "claude-octopus@${_current_pin}"]
-# <<< cc-suite-agent: advisor <<<
-TOML
-_mask_out="$(bash "$SCRIPTS/status.sh" 2>&1)"
-if printf '%s' "$_mask_out" | grep -q 'claude-code pinned @claude-octopus@0.0.1\|but plugin expects'; then
-  ok_msg "status.sh: stale claude-code pin flagged (advisor block did not mask it)"
+mkdir -p bin
+printf '#!/bin/sh\nprintf "2.1.233 (Claude Code)\\n"\n' > bin/claude
+chmod +x bin/claude
+_status_out="$(PATH="$PWD/bin:$PATH" bash "$SCRIPTS/status.sh" 2>&1)"
+if printf '%s' "$_status_out" | grep -q 'Claude CLI dispatch backend.*2.1.233'; then
+  ok_msg "status.sh: direct Claude CLI dispatch backend is healthy"
 else
-  fail_msg "status.sh: stale claude-code pin masked by advisor block"
+  fail_msg "status.sh: direct Claude CLI dispatch backend was not reported"
 fi
 cleanup
 

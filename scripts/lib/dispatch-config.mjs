@@ -8,7 +8,7 @@ export const TARGETS = Object.freeze({
     defaultAccess: "workspace-write",
   }),
   claude: Object.freeze({
-    efforts: Object.freeze(["low", "medium", "high", "max"]),
+    efforts: Object.freeze(["low", "medium", "high", "xhigh", "max"]),
     access: Object.freeze(["default", "acceptEdits", "plan"]),
     defaultEffort: "medium",
     defaultAccess: "default",
@@ -114,7 +114,10 @@ function modelDisplayName(model, catalog) {
 /**
  * Build chooser rows in the fixed UX order:
  * recent configuration, default configuration, then remaining models.
- * Exact duplicate recent/default rows are merged and carry both badges.
+ * Recent and default always remain separate rows. Even when their tuples are
+ * identical, the two entries communicate different intent: "reuse my last
+ * choice" versus "use the product default". Keeping both is also what makes
+ * the composer order stable on first use.
  */
 export function buildDispatchProfiles({ target, recent, defaultConfig, catalog }) {
   targetSpec(target);
@@ -128,7 +131,7 @@ export function buildDispatchProfiles({ target, recent, defaultConfig, catalog }
     access: catalog.access,
   });
   const rows = [];
-  const seen = new Set();
+  const seenModels = new Set();
   let recentUnavailable = false;
   let normalizedRecent = null;
 
@@ -144,41 +147,45 @@ export function buildDispatchProfiles({ target, recent, defaultConfig, catalog }
     }
   }
 
-  const defaultKey = dispatchConfigKey(normalizedDefault);
   if (normalizedRecent) {
-    const recentKey = dispatchConfigKey(normalizedRecent);
-    const sameAsDefault = recentKey === defaultKey;
     rows.push(profile(
       target,
       "recent",
       normalizedRecent,
-      sameAsDefault ? ["recent", "default"] : ["recent"],
+      ["recent"],
       modelDisplayName(normalizedRecent.model, catalog),
       describeDispatchConfig(target, normalizedRecent),
     ));
-    seen.add(recentKey);
-  }
-
-  if (!seen.has(defaultKey)) {
+  } else {
+    // The first-use recent row is explicit and visibly resolves to default at
+    // dispatch time. It must not disappear merely because no MRU exists yet.
     rows.push(profile(
       target,
-      "default",
+      "recent",
       normalizedDefault,
-      ["default"],
-      modelDisplayName(normalizedDefault.model, catalog),
-      describeDispatchConfig(target, normalizedDefault),
+      ["recent"],
+      `最近配置（首次为 ${modelDisplayName(normalizedDefault.model, catalog)}）`,
+      `本项目尚无可用最近配置时采用 ${describeDispatchConfig(target, normalizedDefault)}`,
     ));
-    seen.add(defaultKey);
   }
 
+  rows.push(profile(
+    target,
+    "default",
+    normalizedDefault,
+    ["default"],
+    modelDisplayName(normalizedDefault.model, catalog),
+    describeDispatchConfig(target, normalizedDefault),
+  ));
+  seenModels.add(normalizedDefault.model);
+
   for (const model of catalog.models) {
+    if (seenModels.has(model)) continue;
     const config = {
       model,
       effort: compatibleEffort(normalizedDefault.effort, model, catalog, target),
       access: normalizedDefault.access,
     };
-    const key = dispatchConfigKey(config);
-    if (seen.has(key)) continue;
     const detail = (catalog.modelsDetail ?? []).find((entry) => entry.slug === model);
     rows.push(profile(
       target,
@@ -188,7 +195,7 @@ export function buildDispatchProfiles({ target, recent, defaultConfig, catalog }
       detail?.display_name ?? model,
       describeDispatchConfig(target, config),
     ));
-    seen.add(key);
+    seenModels.add(model);
   }
 
   return { profiles: rows, recentUnavailable };

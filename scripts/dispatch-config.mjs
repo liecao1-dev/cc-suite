@@ -12,6 +12,7 @@ import {
   withRecentDispatch,
 } from "./lib/dispatch-config.mjs";
 import { getConfig, setConfig } from "./lib/state.mjs";
+import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -79,7 +80,7 @@ function readClaudeCatalog() {
     efforts: [...TARGETS.claude.efforts],
     access: [...TARGETS.claude.access],
     defaultModel: "default",
-    metadata: { source: "claude-octopus MCP tool schema" },
+    metadata: { source: "Claude Code CLI model aliases" },
   };
 }
 
@@ -108,7 +109,7 @@ function configureStateRoot(cwd) {
   // Both Claude and Codex must see the same per-project MRU state. Keep it
   // local, private, and ignored instead of relying on either host's process env.
   process.env.CLAUDE_PLUGIN_DATA =
-    process.env.CC_SUITE_STATE_ROOT || path.join(cwd, ".cc-suite", "runtime");
+    process.env.CC_SUITE_STATE_ROOT || path.join(resolveWorkspaceRoot(cwd), ".cc-suite", "runtime");
 }
 
 function validateAgainstCatalog(target, config, catalog) {
