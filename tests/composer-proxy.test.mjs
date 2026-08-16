@@ -16,6 +16,16 @@ function probe(host, chunks) {
   return JSON.parse(result.stdout);
 }
 
+function probeCwd(host, cwd, argv) {
+  const result = spawnSync("python3", [PROXY, "--probe-cwd"], {
+    cwd: ROOT,
+    input: JSON.stringify({ host, cwd, argv }),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout).workspace;
+}
+
 test("selecting exact $claude consumes Enter before Codex can submit it", () => {
   assert.deepEqual(probe("codex", ["$claude", "\r"]), {
     forwarded: ["$claude", ""],
@@ -56,4 +66,21 @@ test("ordinary task submission passes through untouched", () => {
   assert.equal(result.triggers, 0);
   assert.equal(result.forwarded.join(""), "请检查这个项目\r");
   assert.equal(result.buffer, "");
+});
+
+test("Codex -C and --cd select the effective workspace before scope checks", () => {
+  assert.equal(probeCwd("codex", ROOT, ["-C", "tests"]), path.join(ROOT, "tests"));
+  assert.equal(
+    probeCwd("codex", path.dirname(ROOT), [`--cd=${ROOT}`]),
+    ROOT,
+  );
+  assert.equal(
+    probeCwd("codex", path.dirname(ROOT), [`-C${ROOT}`]),
+    ROOT,
+  );
+});
+
+test("Claude and prompt arguments do not invent a different workspace", () => {
+  assert.equal(probeCwd("claude", ROOT, ["--add-dir", "/tmp"]), ROOT);
+  assert.equal(probeCwd("codex", ROOT, ["--", "-C", "/tmp"]), ROOT);
 });

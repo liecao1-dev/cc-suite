@@ -109,7 +109,15 @@ node /Users/charliefolder/projects/vibecoding/cc-suite/scripts/activate-composer
 `~/.zshrc` 增加一个带 cc-suite 起止标记的 PATH 区块，不会替换真实 `codex`、
 `claude`，也不会改它们的全局配置。安装后新开一个终端，再从
 `/Users/charliefolder/projects` 的任意层级子项目启动 CLI；不要求启动目录正好等于
-scope 根目录。
+scope 根目录。只重启 Codex/Claude CLI、不重启安装前已经打开的 shell 不够；这种
+情况下先在那个 shell 执行 `source ~/.zshrc`。
+
+也可以让 shell 留在其他目录，使用 Codex 官方的工作目录参数启动 scope 内项目；
+代理会按 `-C/--cd` 指定的有效目录判定，而不是误用 shell 当前目录：
+
+```bash
+codex -C /Users/charliefolder/projects/Writing-workflow/智慧鉴赏/围炉文稿工作流
+```
 
 检查或完全撤销这层启用：
 

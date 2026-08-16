@@ -166,7 +166,42 @@ def _signal_group(pid: int, sig: signal.Signals) -> None:
             pass
 
 
-def _selector_command(args: argparse.Namespace, session_id: str) -> list[str]:
+def _effective_workspace(host: str, child_argv: list[str], launch_cwd: Path) -> Path:
+    """Resolve the workspace selected by the host CLI before scope checks."""
+
+    if host != "codex":
+        return launch_cwd
+
+    requested: str | None = None
+    index = 0
+    while index < len(child_argv):
+        value = child_argv[index]
+        if value == "--":
+            break
+        if value in {"-C", "--cd"}:
+            if index + 1 < len(child_argv):
+                requested = child_argv[index + 1]
+                index += 2
+                continue
+        elif value.startswith("--cd="):
+            requested = value.split("=", 1)[1]
+        elif value.startswith("-C") and len(value) > 2:
+            requested = value[2:]
+        index += 1
+
+    if not requested:
+        return launch_cwd
+    candidate = Path(requested).expanduser()
+    if not candidate.is_absolute():
+        candidate = launch_cwd / candidate
+    return candidate.resolve()
+
+
+def _selector_command(
+    args: argparse.Namespace,
+    session_id: str,
+    workspace_cwd: Path,
+) -> list[str]:
     node = shutil.which("node")
     if not node:
         raise RuntimeError("node not found on PATH")
@@ -179,17 +214,21 @@ def _selector_command(args: argparse.Namespace, session_id: str) -> list[str]:
         "--target",
         target,
         "--cwd",
-        str(Path.cwd()),
+        str(workspace_cwd),
         "--session-id",
         session_id,
     ]
 
 
-def _run_selector(args: argparse.Namespace, session_id: str) -> tuple[dict | None, str | None]:
+def _run_selector(
+    args: argparse.Namespace,
+    session_id: str,
+    workspace_cwd: Path,
+) -> tuple[dict | None, str | None]:
     env = os.environ.copy()
     env["CC_SUITE_COMPOSER_BYPASS"] = "1"
     completed = subprocess.run(
-        _selector_command(args, session_id),
+        _selector_command(args, session_id, workspace_cwd),
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -227,7 +266,11 @@ def _wait_status(pid: int) -> int:
     return 1
 
 
-def _run_proxy(args: argparse.Namespace, child_argv: list[str]) -> int:
+def _run_proxy(
+    args: argparse.Namespace,
+    child_argv: list[str],
+    workspace_cwd: Path,
+) -> int:
     session_id = uuid.uuid4().hex
     child_env = os.environ.copy()
     child_env["CC_SUITE_COMPOSER_SESSION"] = session_id
@@ -288,7 +331,7 @@ def _run_proxy(args: argparse.Namespace, child_argv: list[str]) -> int:
                     continue
 
                 _signal_group(pid, signal.SIGSTOP)
-                result, error = _run_selector(args, session_id)
+                result, error = _run_selector(args, session_id, workspace_cwd)
                 try:
                     os.write(master_fd, b"\x7f" * len(HOSTS[args.host]["trigger"]))
                 except OSError:
@@ -338,6 +381,19 @@ def _probe_input() -> int:
     return 0
 
 
+def _probe_cwd() -> int:
+    payload = json.load(sys.stdin)
+    launch_cwd = Path(payload["cwd"]).expanduser().resolve()
+    workspace = _effective_workspace(
+        payload["host"],
+        payload.get("argv", []),
+        launch_cwd,
+    )
+    json.dump({"workspace": str(workspace)}, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
 def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--host", choices=sorted(HOSTS), required=True)
@@ -356,11 +412,14 @@ def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
 def main(argv: list[str]) -> int:
     if argv == ["--probe-input"]:
         return _probe_input()
+    if argv == ["--probe-cwd"]:
+        return _probe_cwd()
     args, child_argv = _parse_args(argv)
-    cwd = Path.cwd().resolve()
+    launch_cwd = Path.cwd().resolve()
+    workspace_cwd = _effective_workspace(args.host, child_argv, launch_cwd)
     if (
         os.environ.get("CC_SUITE_COMPOSER_BYPASS") == "1"
-        or not _inside(args.scope, cwd)
+        or not _inside(args.scope, workspace_cwd)
         or not sys.stdin.isatty()
         or not sys.stdout.isatty()
     ):
@@ -369,7 +428,7 @@ def main(argv: list[str]) -> int:
             [str(args.real_binary), *child_argv],
             os.environ.copy(),
         )
-    return _run_proxy(args, child_argv)
+    return _run_proxy(args, child_argv, workspace_cwd)
 
 
 if __name__ == "__main__":
