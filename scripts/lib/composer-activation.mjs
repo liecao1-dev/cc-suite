@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { isWithin } from "./project-dispatch.mjs";
+import { resolveActivatedCliBinary } from "./activated-cli.mjs";
 
 const MANAGED_BY = "cc-suite";
 const SCHEMA = 1;
@@ -63,7 +64,7 @@ function readManifest(scopeRoot) {
   return null;
 }
 
-function resolveBinary(name, { scopeRoot, pathValue, preferred }) {
+function resolveBinary(name, { scopeRoot, pathValue, preferred, fallback }) {
   const bin = path.join(scopeRoot, ".cc-suite", "bin");
   const candidates = [
     preferred,
@@ -71,6 +72,7 @@ function resolveBinary(name, { scopeRoot, pathValue, preferred }) {
       .split(path.delimiter)
       .filter(Boolean)
       .map((directory) => path.join(directory, name)),
+    fallback,
   ].filter(Boolean);
   for (const candidate of candidates) {
     const absolute = path.resolve(candidate);
@@ -81,9 +83,35 @@ function resolveBinary(name, { scopeRoot, pathValue, preferred }) {
 }
 
 export function composerShimBody({ host, scopeRoot, sourceRoot, realBinary }) {
+  const managedBin = path.join(scopeRoot, ".cc-suite", "bin");
   return [
     "#!/usr/bin/env bash",
-    `exec python3 ${shellQuote(path.join(sourceRoot, "scripts", "composer-proxy.py"))} --host ${host} --scope ${shellQuote(scopeRoot)} --source ${shellQuote(sourceRoot)} --real-binary ${shellQuote(realBinary)} -- "$@"`,
+    "_cc_suite_exec_real() {",
+    "  local _cc_suite_dir _cc_suite_candidate _cc_suite_old_ifs",
+    "  _cc_suite_old_ifs=$IFS",
+    "  IFS=:",
+    "  for _cc_suite_dir in $PATH; do",
+    "    [ -n \"$_cc_suite_dir\" ] || _cc_suite_dir=.",
+    `    [ "$_cc_suite_dir" = ${shellQuote(managedBin)} ] && continue`,
+    `    _cc_suite_candidate="$_cc_suite_dir/${host}"`,
+    "    if [ -x \"$_cc_suite_candidate\" ] && ! [ \"$_cc_suite_candidate\" -ef \"$0\" ]; then",
+    "      IFS=$_cc_suite_old_ifs",
+    "      exec \"$_cc_suite_candidate\" \"$@\"",
+    "    fi",
+    "  done",
+    "  IFS=$_cc_suite_old_ifs",
+    `  if [ -x ${shellQuote(realBinary)} ]; then exec ${shellQuote(realBinary)} "$@"; fi`,
+    `  printf '%s\\n' 'cc-suite: real ${host} executable is unavailable' >&2`,
+    "  exit 127",
+    "}",
+    `_cc_suite_cwd="$(pwd -P 2>/dev/null)" || _cc_suite_exec_real "$@"`,
+    `case "$_cc_suite_cwd" in`,
+    `  ${shellQuote(scopeRoot)}|${shellQuote(scopeRoot)}/*) ;;`,
+    "  *) _cc_suite_exec_real \"$@\" ;;",
+    "esac",
+    "unset _cc_suite_cwd",
+    `_cc_suite_real_binary="$(node ${shellQuote(path.join(sourceRoot, "scripts", "resolve-activated-cli.mjs"))} --scope ${shellQuote(scopeRoot)} --target ${host})" || exit $?`,
+    `exec python3 ${shellQuote(path.join(sourceRoot, "scripts", "composer-proxy.py"))} --host ${host} --scope ${shellQuote(scopeRoot)} --source ${shellQuote(sourceRoot)} --real-binary "$_cc_suite_real_binary" -- "$@"`,
     "",
   ].join("\n");
 }
@@ -174,12 +202,14 @@ export function installComposerActivation({
     codex: resolveBinary("codex", {
       scopeRoot: scope,
       pathValue,
-      preferred: codexBinary ?? existing?.binaries?.codex,
+      preferred: codexBinary,
+      fallback: existing?.binaries?.codex,
     }),
     claude: resolveBinary("claude", {
       scopeRoot: scope,
       pathValue,
-      preferred: claudeBinary ?? existing?.binaries?.claude,
+      preferred: claudeBinary,
+      fallback: existing?.binaries?.claude,
     }),
   };
   const directory = path.join(scope, ".cc-suite", "bin");
@@ -264,7 +294,8 @@ export function inspectComposerActivation(scopeRoot) {
     } catch {
       problems.push(`${host} composer shim missing, stale, or user-owned`);
     }
-    if (!executable(manifest.binaries?.[host])) problems.push(`real ${host} executable missing`);
+    try { resolveActivatedCliBinary(scope, host); }
+    catch { problems.push(`real ${host} executable missing`); }
   }
   try {
     const shellText = fs.readFileSync(manifest.shellFile, "utf8");
@@ -275,16 +306,18 @@ export function inspectComposerActivation(scopeRoot) {
   return { ok: problems.length === 0, problems, manifest };
 }
 
-export function repairComposerActivation(scopeRoot) {
+export function repairComposerActivation(scopeRoot, {
+  sourceRoot = null,
+  pathValue = process.env.PATH,
+} = {}) {
   const scope = fs.realpathSync.native(path.resolve(scopeRoot));
   const manifest = readManifest(scope);
   if (!manifest) return null;
   return installComposerActivation({
     scopeRoot: scope,
-    sourceRoot: manifest.sourceRoot,
+    sourceRoot: sourceRoot ?? manifest.sourceRoot,
     shellFile: manifest.shellFile,
-    codexBinary: manifest.binaries.codex,
-    claudeBinary: manifest.binaries.claude,
+    pathValue,
   });
 }
 

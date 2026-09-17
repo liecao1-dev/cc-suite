@@ -20,7 +20,7 @@ function nearestManagedProject(cwd) {
   }
 }
 
-export function resolveWorkspaceRoot(cwd) {
+export function resolveWorkspaceRoot(cwd, fallbackRoot = cwd) {
   // A managed marker wins over Git. This keeps non-Git projects scoped and,
   // importantly, prevents a directory under a broad parent repository (for
   // example $HOME) from storing cc-suite state outside the project boundary.
@@ -35,5 +35,5 @@ export function resolveWorkspaceRoot(cwd) {
   if (result.status === 0 && result.stdout.trim()) {
     return result.stdout.trim();
   }
-  return cwd;
+  return fallbackRoot;
 }

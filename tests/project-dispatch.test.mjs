@@ -49,6 +49,8 @@ test("project discovery includes nested repos/worktrees and prunes dependencies"
     const repo = path.join(scope, "repo");
     const nested = path.join(repo, "nested-worktree");
     const plain = path.join(scope, "中文 plain project");
+    const managedWorkspace = path.join(scope, "managed workspace");
+    const legacyWorkspace = path.join(scope, "legacy workspace");
     fs.mkdirSync(repo);
     initGitRepo(repo);
     fs.mkdirSync(nested);
@@ -56,12 +58,20 @@ test("project discovery includes nested repos/worktrees and prunes dependencies"
     fs.mkdirSync(path.join(plain, "child"), { recursive: true });
     fs.writeFileSync(path.join(plain, "package.json"), "{}\n");
     fs.writeFileSync(path.join(plain, "child", "package.json"), "{}\n");
+    fs.mkdirSync(managedWorkspace);
+    installProjectDispatch({ root: managedWorkspace, scopeRoot: scope, sourceRoot: SOURCE_ROOT, catalog: CATALOG });
+    fs.mkdirSync(path.join(legacyWorkspace, ".codex"), { recursive: true });
+    fs.writeFileSync(path.join(legacyWorkspace, ".codex", "hooks.json"), `${JSON.stringify({
+      description: "cc-suite project-scoped dispatch hook.",
+      hooks: {},
+    }, null, 2)}\n`);
     fs.mkdirSync(path.join(scope, "node_modules", "ignored"), { recursive: true });
     fs.mkdirSync(path.join(scope, ".runtime", "ignored"), { recursive: true });
     fs.mkdirSync(path.join(scope, "node_modules", "ignored", ".git"));
     fs.mkdirSync(path.join(scope, ".runtime", "ignored", ".git"));
 
-    const canonical = [scope, plain, repo, nested].map((item) => fs.realpathSync(item));
+    const canonical = [scope, plain, managedWorkspace, legacyWorkspace, repo, nested]
+      .map((item) => fs.realpathSync(item));
     assert.deepEqual(discoverProjectRoots(scope), canonical.sort((a, b) => {
       const da = path.resolve(a).split(path.sep).length;
       const db = path.resolve(b).split(path.sep).length;
@@ -70,7 +80,7 @@ test("project discovery includes nested repos/worktrees and prunes dependencies"
   } finally { cleanupDir(scope); }
 });
 
-test("scope sync installs model-agnostic hooks even before Codex creates a models cache", () => {
+test("scope sync installs model-agnostic selectors and user hooks without a models cache", () => {
   const scope = makeTempDir("cc-suite-no-cache-");
   const home = path.join(scope, "empty-home");
   try {
@@ -86,12 +96,15 @@ test("scope sync installs model-agnostic hooks even before Codex creates a model
     const output = JSON.parse(result.stdout);
     assert.equal(output.catalog, undefined);
     assert.equal(fs.existsSync(path.join(scope, ".claude", "skills", "codex", "SKILL.md")), true);
-    assert.equal(fs.existsSync(path.join(scope, ".codex", "hooks.json")), true);
-    assert.equal(fs.existsSync(path.join(scope, ".claude", "settings.local.json")), true);
+    assert.equal(fs.existsSync(path.join(scope, ".codex", "hooks.json")), false);
+    assert.equal(fs.existsSync(path.join(scope, ".claude", "settings.local.json")), false);
+    assert.match(fs.readFileSync(path.join(home, ".codex", "hooks.json"), "utf8"), /cc-suite-dispatch-hook/);
+    assert.match(fs.readFileSync(path.join(home, ".claude", "settings.json"), "utf8"), /cc-suite-dispatch-hook/);
+    assert.equal(fs.existsSync(path.join(scope, ".cc-suite", "bin", "cc-suite-dispatch-hook")), true);
   } finally { cleanupDir(scope); }
 });
 
-test("project install is idempotent, locally ignored, and safely removable", () => {
+test("project install is idempotent, keeps only selectors locally, and is safely removable", () => {
   const scope = makeTempDir("cc-suite-project-");
   try {
     initGitRepo(scope);
@@ -102,9 +115,11 @@ test("project install is idempotent, locally ignored, and safely removable", () 
     const content = fs.readFileSync(profile, "utf8");
     assert.match(content, /composer 代理/);
     assert.match(content, /\/codex.*不会被插入或发送/s);
+    assert.match(content, /输入框内会出现受保护的.*Codex 与完整配置前缀/s);
     assert.equal(fs.lstatSync(path.join(scope, ".agents", "skills", "claude")).isSymbolicLink(), true);
-    assert.match(fs.readFileSync(path.join(scope, ".codex", "hooks.json"), "utf8"), /--host codex --target claude/);
-    assert.match(fs.readFileSync(path.join(scope, ".claude", "settings.local.json"), "utf8"), /--host claude --target codex/);
+    assert.equal(fs.existsSync(path.join(scope, ".codex", "hooks.json")), false);
+    assert.equal(fs.existsSync(path.join(scope, ".claude", "settings.local.json")), false);
+    assert.equal(fs.existsSync(path.join(scope, ".cc-suite", "project.json")), false);
     assert.equal(run("git", ["status", "--short", "--untracked-files=all"], { cwd: scope }).stdout, "");
 
     const second = installProjectDispatch({ root: scope, scopeRoot: scope, sourceRoot: SOURCE_ROOT, catalog: CATALOG });
@@ -160,7 +175,7 @@ test("project install preserves an unrelated .agents/skills root symlink", () =>
   } finally { cleanupDir(scope); }
 });
 
-test("project hooks merge idempotently and uninstall preserves unrelated handlers and settings", () => {
+test("project migration removes legacy cc-suite hooks and preserves unrelated handlers", () => {
   const scope = makeTempDir("cc-suite-hook-merge-");
   try {
     fs.mkdirSync(path.join(scope, ".codex"), { recursive: true });
@@ -168,14 +183,27 @@ test("project hooks merge idempotently and uninstall preserves unrelated handler
     const originalCodex = {
       description: "user hooks",
       hooks: {
-        UserPromptSubmit: [{ hooks: [{ type: "command", command: "node user-codex-hook.mjs" }] }],
+        UserPromptSubmit: [{ hooks: [
+          { type: "command", command: "node user-codex-hook.mjs" },
+          { type: "command", command: `node '${path.join(SOURCE_ROOT, "scripts", "dispatch-hook.mjs")}' --host codex --target claude` },
+        ] }],
+        Stop: [{ hooks: [
+          { type: "command", command: "node user-codex-stop.mjs" },
+          { type: "command", command: `node '${path.join(SOURCE_ROOT, "scripts", "dispatch-hook.mjs")}' --host codex --target claude` },
+        ] }],
       },
     };
     const originalClaude = {
       theme: "dark",
       hooks: {
-        UserPromptSubmit: [{ hooks: [{ type: "command", command: "node user-claude-submit.mjs" }] }],
-        UserPromptExpansion: [{ matcher: "^mine$", hooks: [{ type: "command", command: "node user-expansion.mjs" }] }],
+        UserPromptSubmit: [{ hooks: [
+          { type: "command", command: "node user-claude-submit.mjs" },
+          { type: "command", command: `node '${path.join(SOURCE_ROOT, "scripts", "dispatch-hook.mjs")}' --host claude --target codex` },
+        ] }],
+        UserPromptExpansion: [{ matcher: "^mine$", hooks: [
+          { type: "command", command: "node user-expansion.mjs" },
+          { type: "command", command: `node '${path.join(SOURCE_ROOT, "scripts", "dispatch-hook.mjs")}' --host claude --target codex` },
+        ] }],
       },
     };
     fs.writeFileSync(path.join(scope, ".codex", "hooks.json"), `${JSON.stringify(originalCodex, null, 2)}\n`);
@@ -186,10 +214,11 @@ test("project hooks merge idempotently and uninstall preserves unrelated handler
     const codexInstalled = fs.readFileSync(path.join(scope, ".codex", "hooks.json"), "utf8");
     const claudeInstalled = fs.readFileSync(path.join(scope, ".claude", "settings.local.json"), "utf8");
     assert.match(codexInstalled, /user-codex-hook/);
-    assert.match(codexInstalled, /--host codex --target claude/);
+    assert.match(codexInstalled, /user-codex-stop/);
+    assert.doesNotMatch(codexInstalled, /--host codex --target claude/);
     assert.match(claudeInstalled, /user-claude-submit/);
     assert.match(claudeInstalled, /user-expansion/);
-    assert.match(claudeInstalled, /--host claude --target codex/);
+    assert.doesNotMatch(claudeInstalled, /--host claude --target codex/);
 
     const second = installProjectDispatch({ root: scope, scopeRoot: scope, sourceRoot: SOURCE_ROOT, catalog: CATALOG });
     assert.equal(second.created.length + second.updated.length + second.removed.length, 0);
@@ -198,8 +227,54 @@ test("project hooks merge idempotently and uninstall preserves unrelated handler
 
     const removed = removeProjectDispatch({ root: scope, scopeRoot: scope, sourceRoot: SOURCE_ROOT });
     assert.equal(removed.conflicts.length, 0);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(scope, ".codex", "hooks.json"), "utf8")), originalCodex);
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(scope, ".claude", "settings.local.json"), "utf8")), originalClaude);
+    assert.match(fs.readFileSync(path.join(scope, ".codex", "hooks.json"), "utf8"), /user-codex-hook/);
+    assert.match(fs.readFileSync(path.join(scope, ".claude", "settings.local.json"), "utf8"), /user-claude-submit/);
+  } finally { cleanupDir(scope); }
+});
+
+test("project install preserves a user-owned Claude status line", () => {
+  const scope = makeTempDir("cc-suite-statusline-collision-");
+  try {
+    fs.mkdirSync(path.join(scope, ".claude"), { recursive: true });
+    const statusLine = { type: "command", command: "node my-statusline.mjs", refreshInterval: 5 };
+    fs.writeFileSync(path.join(scope, ".claude", "settings.local.json"), `${JSON.stringify({
+      theme: "dark",
+      statusLine,
+    }, null, 2)}\n`);
+
+    const result = installProjectDispatch({ root: scope, scopeRoot: scope, sourceRoot: SOURCE_ROOT, catalog: CATALOG });
+    const installed = JSON.parse(fs.readFileSync(path.join(scope, ".claude", "settings.local.json"), "utf8"));
+    assert.deepEqual(installed.statusLine, statusLine);
+    assert.doesNotMatch(result.conflicts.join("\n"), /statusLine/);
+    assert.equal(installed.hooks, undefined);
+
+    removeProjectDispatch({ root: scope, scopeRoot: scope, sourceRoot: SOURCE_ROOT });
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(scope, ".claude", "settings.local.json"), "utf8")),
+      { theme: "dark", statusLine },
+    );
+  } finally { cleanupDir(scope); }
+});
+
+test("project install removes the obsolete cc-suite Claude status line", () => {
+  const scope = makeTempDir("cc-suite-obsolete-statusline-");
+  try {
+    fs.mkdirSync(path.join(scope, ".claude"), { recursive: true });
+    const script = path.join(SOURCE_ROOT, "scripts", "dispatch-statusline.mjs");
+    fs.writeFileSync(path.join(scope, ".claude", "settings.local.json"), `${JSON.stringify({
+      theme: "dark",
+      statusLine: {
+        type: "command",
+        command: `node '${script}' --host claude`,
+        refreshInterval: 1,
+      },
+    }, null, 2)}\n`);
+
+    installProjectDispatch({ root: scope, scopeRoot: scope, sourceRoot: SOURCE_ROOT, catalog: CATALOG });
+    const installed = JSON.parse(fs.readFileSync(path.join(scope, ".claude", "settings.local.json"), "utf8"));
+    assert.equal(installed.statusLine, undefined);
+    assert.equal(installed.theme, "dark");
+    assert.equal(installed.hooks, undefined);
   } finally { cleanupDir(scope); }
 });
 

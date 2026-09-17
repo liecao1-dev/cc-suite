@@ -40,11 +40,22 @@ export function cleanupDir(dirPath) {
 // ambiently passes on CI and fails on a developer's machine:
 //
 //   CLAUDE_PLUGIN_DATA      reroutes resolveStateDir away from the temp fallback
+//   CC_SUITE_SCOPE_ROOT     bounds user-level dispatch hooks and central state
 //   CODEX_TOOLKIT_SESSION_ID  makes job queries drop every job lacking that id
 //
 // Tests must declare the values they depend on rather than inherit them.
 export const AMBIENT_STATE_ENV = Object.freeze([
   "CLAUDE_PLUGIN_DATA",
+  "CC_SUITE_SCOPE_ROOT",
+  "CC_SUITE_WORKSPACE_ROOT",
+  "CC_SUITE_COMPOSER_SCOPE",
+  "CC_SUITE_COMPOSER_HOST",
+  "CC_SUITE_COMPOSER_SESSION",
+  "CC_SUITE_COMPOSER_BYPASS",
+  "CC_SUITE_DISPATCH_BROKER_SOCKET",
+  "CC_SUITE_DISPATCH_BROKER_SECRET",
+  "CC_SUITE_DISPATCH_BROKER_BYPASS",
+  "CC_SUITE_REQUEST_ID",
   "CODEX_TOOLKIT_SESSION_ID",
 ]);
 

@@ -39,7 +39,7 @@ import {
 } from "./lib/qwen-stream.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 
-const DEFAULT_JOB_TIMEOUT_MS = 15 * 60 * 1000;
+const DEFAULT_JOB_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_IDLE_TIMEOUT_MS = 4 * 60 * 1000;
 const DEFAULT_MAX_RESUMES = 2;

@@ -14,9 +14,10 @@ test("init teaches the same pre-send interaction in both hosts", () => {
   assert.doesNotMatch(INIT, /回复 [123]|AskUserQuestion|multiSelect/);
 });
 
-test("init uses a project-bounded idempotent synchronizer", () => {
+test("init uses a scope-bounded idempotent synchronizer", () => {
   assert.match(INIT, /scripts\/sync-projects\.mjs/);
-  assert.match(INIT, /--scope "\$PWD" --project "\$PWD"/);
+  assert.match(INIT, /scope="\$\{CC_SUITE_SCOPE_ROOT:-\$PWD\}"/);
+  assert.match(INIT, /--scope "\$scope" --project "\$PWD"/);
   assert.match(INIT, /检查 `node`、`codex` 和 `claude`/);
   assert.match(INIT, /缺失时明确报错并停止/);
   assert.doesNotMatch(INIT, /mcp_claude|mcp_codex|bridge_tools/);

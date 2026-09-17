@@ -54,7 +54,9 @@ test("init installs both pre-send dispatcher entries through the scoped synchron
   assert.match(content, /补全菜单高亮 `\$claude` 并按 Enter\/Tab/);
   assert.match(content, /绝不能作为消息提交/);
   assert.match(content, /sync-projects\.mjs/);
-  assert.match(content, /--scope "\$PWD" --project "\$PWD"/);
+  assert.match(content, /scope="\$\{CC_SUITE_SCOPE_ROOT:-\$PWD\}"/);
+  assert.match(content, /--scope "\$scope" --project "\$PWD"/);
+  assert.match(content, /稳定用户级 hooks/);
   assert.doesNotMatch(content, /AskUserQuestion|mcp_claude|mcp_codex|回复编号/);
 });
 

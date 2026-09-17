@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install exact /codex and $claude discovery entries plus one-shot task hooks.
+# Install exact /codex and $claude discovery entries plus stable user-level,
+# scope-gated one-shot task hooks.
 # Scope-level pre-send interception is activated separately by
 # scripts/activate-composer.mjs.
 

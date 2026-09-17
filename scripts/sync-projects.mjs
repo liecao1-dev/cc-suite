@@ -22,6 +22,11 @@ import {
   inspectComposerActivation,
   repairComposerActivation,
 } from "./lib/composer-activation.mjs";
+import {
+  inspectUserDispatch,
+  installUserDispatch,
+  removeUserDispatch,
+} from "./lib/user-dispatch.mjs";
 
 const SOURCE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const COMMANDS = new Set(["sync", "status", "remove", "list"]);
@@ -86,7 +91,7 @@ function summarizeResult(result) {
   };
 }
 
-function printHuman(command, scope, roots, results, launcher, activation) {
+function printHuman(command, scope, roots, results, launcher, activation, userDispatch) {
   process.stdout.write(`cc-suite ${command}: ${scope}\n`);
   process.stdout.write(`projects: ${roots.length}\n`);
   for (const result of results) {
@@ -103,6 +108,9 @@ function printHuman(command, scope, roots, results, launcher, activation) {
     for (const conflict of summary.conflicts) process.stdout.write(`    ! ${conflict}\n`);
   }
   if (launcher) process.stdout.write(`launcher: ${launcher}\n`);
+  if (userDispatch) {
+    process.stdout.write(`${userDispatch.ok === false ? "!" : "✓"} user-level scope-gated dispatch${userDispatch.problems?.length ? ` — ${userDispatch.problems.join("; ")}` : ""}\n`);
+  }
   if (activation) {
     process.stdout.write(`${activation.ok ? "✓" : "!"} composer pre-send proxy${activation.problems?.length ? ` — ${activation.problems.join("; ")}` : ""}\n`);
   }
@@ -129,6 +137,7 @@ if (args.command === "list") {
 
 let launcher = null;
 let activation = null;
+let userDispatch = null;
 const results = [];
 let catalog = null;
 if (args.command === "sync") {
@@ -141,6 +150,31 @@ if (args.command === "sync") {
     if (args.catalogFile) fail(error.message, 1);
     catalog = null;
   }
+}
+
+// Install the stable user-level hook before removing any legacy project-local
+// hook. This ordering keeps dispatch available if the user's global settings
+// contain a collision that must be resolved manually.
+if (args.command === "sync") {
+  try {
+    const installed = installUserDispatch({ scopeRoot: scope, sourceRoot: source });
+    userDispatch = { ok: true, ...installed };
+  } catch (error) {
+    const output = {
+      command: args.command,
+      scope,
+      source,
+      roots,
+      userDispatch: { ok: false, problems: [error.message] },
+      results: [],
+    };
+    if (args.json) process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+    else printHuman(args.command, scope, roots, [], null, null, output.userDispatch);
+    process.exit(1);
+  }
+} else if (args.command === "status") {
+  try { userDispatch = inspectUserDispatch(scope); }
+  catch (error) { userDispatch = { ok: false, problems: [error.message] }; }
 }
 
 for (const root of roots) {
@@ -166,8 +200,19 @@ try {
   results.push({ root: scope, error: `launcher: ${error.message}` });
 }
 
+if (args.command === "remove" && !args.project) {
+  try {
+    userDispatch = { ok: true, ...removeUserDispatch(scope) };
+  } catch (error) {
+    userDispatch = { ok: false, problems: [error.message] };
+  }
+}
+
 try {
-  if (args.command === "sync" && !args.project) repairComposerActivation(scope);
+  // Even a one-project update comes from the newest plugin source. Retarget
+  // the owned shims to it so a package-manager/cache path change cannot leave
+  // the next CLI launch bound to a deleted release directory.
+  if (args.command === "sync") repairComposerActivation(scope, { sourceRoot: source });
   if (args.command === "sync" || args.command === "status") {
     activation = inspectComposerActivation(scope);
   }
@@ -182,15 +227,17 @@ const output = {
   roots,
   launcher,
   activation,
+  userDispatch,
   catalog: catalog ? { defaultModel: catalog.defaultModel, models: catalog.models } : undefined,
   results: results.map((result) => result.error || Object.hasOwn(result, "ok") ? result : summarizeResult(result)),
 };
 if (args.json) process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
-else printHuman(args.command, scope, roots, results, launcher, activation);
+else printHuman(args.command, scope, roots, results, launcher, activation, userDispatch);
 
 if (
   results.some((result) => result.error || result.ok === false || result.conflicts?.length)
   || (args.command === "status" && activation?.ok === false)
+  || userDispatch?.ok === false
 ) {
   process.exitCode = 1;
 }

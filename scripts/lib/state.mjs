@@ -273,16 +273,38 @@ export function isTerminalJob(job) {
   return !isActiveJob(job);
 }
 
-function pruneJobs(jobs) {
+function programmaticResultJobIds(config) {
+  const protectedIds = new Set();
+  for (const request of Object.values(config?.programmaticDispatches ?? {})) {
+    const jobId = request?.terminal?.jobId;
+    if (
+      ["completed", "failed", "stalled"].includes(request?.status)
+      && typeof jobId === "string"
+      && JOB_ID_PATTERN.test(jobId)
+    ) {
+      protectedIds.add(jobId);
+    }
+  }
+  return protectedIds;
+}
+
+function pruneJobs(jobs, protectedIds = new Set()) {
   const sorted = [...jobs].sort((a, b) =>
     String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? ""))
   );
-  // Active jobs are never pruned; the cap applies to terminal jobs only.
+  // Active jobs and terminal artifacts referenced by the bounded programmatic
+  // idempotency registry are never pruned. Other terminal history fills only
+  // the remaining normal budget, so preserving a replay result cannot make
+  // the unreferenced history grow without bound.
   const activeCount = sorted.filter(isActiveJob).length;
-  const terminalBudget = Math.max(0, MAX_JOBS - activeCount);
+  const protectedTerminalCount = sorted.filter((job) => (
+    !isActiveJob(job) && protectedIds.has(job.id)
+  )).length;
+  const terminalBudget = Math.max(0, MAX_JOBS - activeCount - protectedTerminalCount);
   let terminalKept = 0;
   return sorted.filter((job) => {
     if (isActiveJob(job)) return true;
+    if (protectedIds.has(job.id)) return true;
     if (terminalKept < terminalBudget) {
       terminalKept += 1;
       return true;
@@ -316,10 +338,14 @@ export function saveState(cwd, state) {
   return withStateLock(cwd, () => {
     const previousJobs = loadState(cwd).jobs;
     ensureStateDir(cwd);
-    const nextJobs = pruneJobs(state.jobs ?? []);
+    const nextConfig = { ...defaultState().config, ...(state.config ?? {}) };
+    const nextJobs = pruneJobs(
+      state.jobs ?? [],
+      programmaticResultJobIds(nextConfig),
+    );
     const nextState = {
       version: STATE_VERSION,
-      config: { ...defaultState().config, ...(state.config ?? {}) },
+      config: nextConfig,
       jobs: nextJobs,
     };
 

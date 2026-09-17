@@ -210,11 +210,12 @@ else
 fi
 
 # --- 6. One-entry keyboard dispatchers -------------------------------------
-# The project installer creates exact discovery entries and project-local hooks
-# at the actual project root: `.agents/skills/claude` for Codex and
-# `.claude/skills/codex` for Claude. The scope-level composer proxy opens the
-# `/dev/tty` picker before either selector can be inserted or submitted; these
-# hooks consume the selected tuple only when the real task is sent.
+# The project installer creates only exact discovery entries at the actual
+# project root: `.agents/skills/claude` for Codex and `.claude/skills/codex` for
+# Claude. Stable user-level hooks are scope-gated and keep all runtime state in
+# the scope root. The composer proxy opens the `/dev/tty` picker before either
+# selector can be inserted or submitted; an armed hook consumes the tuple only
+# when the real task is sent.
 if tool_enabled codex; then
   bash "${SCRIPT_DIR}/install_dispatchers.sh"
 else

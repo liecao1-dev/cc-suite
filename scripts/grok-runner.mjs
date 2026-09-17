@@ -54,7 +54,7 @@ import {
 } from "./lib/process.mjs";
 import { withDelegationBoundary } from "./lib/delegation-boundary.mjs";
 
-const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — matches the other runners
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes — matches the other runners
 const HEARTBEAT_MS = 30 * 1000;
 const SIGKILL_GRACE_MS = 5 * 1000;
 // ACP defines protocolVersion as a number, not a string; strict agents reject

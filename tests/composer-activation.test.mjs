@@ -9,6 +9,7 @@ import {
   composerShimIsOwned,
   inspectComposerActivation,
   installComposerActivation,
+  repairComposerActivation,
   removeComposerActivation,
 } from "../scripts/lib/composer-activation.mjs";
 import { cleanupDir, makeTempDir } from "./helpers.mjs";
@@ -77,9 +78,28 @@ test("composer activation is scoped, idempotent, inspectable, and reversible", (
 
     const outside = path.join(fixture, "outside");
     fs.mkdirSync(outside);
-    const bypass = spawnSync(codexShim, ["--version"], { cwd: outside, encoding: "utf8" });
+    const bypass = spawnSync(codexShim, ["--version"], {
+      cwd: outside,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${realBin}:${process.env.PATH ?? ""}` },
+    });
     assert.equal(bypass.status, 0, bypass.stderr);
     assert.equal(bypass.stdout, "codex-real\n--version\n");
+
+    const movedBin = path.join(fixture, "moved-bin");
+    fs.mkdirSync(movedBin);
+    fakeBinary(movedBin, "codex");
+    fs.unlinkSync(codexBinary);
+    const afterMove = spawnSync(codexShim, ["--version"], {
+      cwd: outside,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${path.dirname(codexShim)}:${movedBin}:${path.dirname(process.execPath)}:${process.env.PATH ?? ""}`,
+      },
+    });
+    assert.equal(afterMove.status, 0, afterMove.stderr);
+    assert.equal(afterMove.stdout, "codex-real\n--version\n");
 
     const removed = removeComposerActivation(scope);
     assert.equal(removed.removed.length, 4);
@@ -117,4 +137,72 @@ test("shell activation explicitly documents its cwd-only behavior", () => {
   assert.match(composerShellBlock("/tmp/projects"), /change composer behavior only while cwd is inside/);
   assert.match(composerShellBlock("/tmp/projects"), /\/tmp\/projects\/\.cc-suite\/bin/);
   assert.match(composerShellBlock("/tmp/projects"), /path=\(/);
+});
+
+test("repair retargets owned shims to the current source directory", () => {
+  const fixture = makeTempDir("cc-suite-composer-retarget-");
+  const scope = path.join(fixture, "projects");
+  const firstSource = path.join(fixture, "release-1");
+  const secondSource = path.join(fixture, "release-2");
+  const realBin = path.join(fixture, "real-bin");
+  const currentBin = path.join(fixture, "current-bin");
+  const shellFile = path.join(fixture, ".zshrc");
+  try {
+    fs.mkdirSync(scope);
+    fs.mkdirSync(firstSource);
+    fs.mkdirSync(secondSource);
+    fs.mkdirSync(realBin);
+    fs.mkdirSync(currentBin);
+    const codexBinary = fakeBinary(realBin, "codex");
+    const claudeBinary = fakeBinary(realBin, "claude");
+    installComposerActivation({
+      scopeRoot: scope,
+      sourceRoot: firstSource,
+      shellFile,
+      codexBinary,
+      claudeBinary,
+    });
+
+    const currentCodex = fakeBinary(currentBin, "codex");
+    const currentClaude = fakeBinary(currentBin, "claude");
+    repairComposerActivation(scope, { sourceRoot: secondSource, pathValue: currentBin });
+    const manifest = JSON.parse(fs.readFileSync(path.join(scope, ".cc-suite", "composer-activation.json"), "utf8"));
+    assert.equal(manifest.sourceRoot, fs.realpathSync.native(secondSource));
+    assert.equal(manifest.binaries.codex, path.resolve(currentCodex));
+    assert.equal(manifest.binaries.claude, path.resolve(currentClaude));
+    assert.match(fs.readFileSync(path.join(scope, ".cc-suite", "bin", "codex"), "utf8"), /release-2/);
+  } finally {
+    cleanupDir(fixture);
+  }
+});
+
+test("an outside-scope command bypasses even when the installed source disappeared", () => {
+  const fixture = makeTempDir("cc-suite-composer-outside-bypass-");
+  const scope = path.join(fixture, "projects");
+  const source = path.join(fixture, "removed-release");
+  const outside = path.join(fixture, "outside");
+  const realBin = path.join(fixture, "real-bin");
+  try {
+    fs.mkdirSync(scope);
+    fs.mkdirSync(source);
+    fs.mkdirSync(outside);
+    fs.mkdirSync(realBin);
+    installComposerActivation({
+      scopeRoot: scope,
+      sourceRoot: source,
+      shellFile: path.join(fixture, ".zshrc"),
+      codexBinary: fakeBinary(realBin, "codex"),
+      claudeBinary: fakeBinary(realBin, "claude"),
+    });
+    fs.rmSync(source, { recursive: true });
+    const result = spawnSync(path.join(scope, ".cc-suite", "bin", "codex"), ["--version"], {
+      cwd: outside,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${realBin}:${process.env.PATH ?? ""}` },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "codex-real\n--version\n");
+  } finally {
+    cleanupDir(fixture);
+  }
 });

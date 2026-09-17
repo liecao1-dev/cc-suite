@@ -29,21 +29,16 @@ const PLUGIN_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname)
 const configCli = path.join(PLUGIN_ROOT, "scripts", "dispatch-config.mjs");
 
 function runConfig(workspace, args) {
-  const markerDir = path.join(workspace, ".cc-suite");
-  fs.mkdirSync(markerDir, { recursive: true });
-  const marker = path.join(markerDir, "project.json");
-  if (!fs.existsSync(marker)) {
-    fs.writeFileSync(marker, `${JSON.stringify({
-      schema: 1,
-      managedBy: "cc-suite",
-      sourceRoot: PLUGIN_ROOT,
-      scopeRoot: workspace,
-    }, null, 2)}\n`);
-  }
   const result = spawnSync(process.execPath, [configCli, ...args, "--cwd", workspace], {
     cwd: workspace,
     encoding: "utf8",
-    env: { ...process.env, HOME: workspace },
+    env: {
+      ...process.env,
+      HOME: workspace,
+      CC_SUITE_SCOPE_ROOT: workspace,
+      CC_SUITE_WORKSPACE_ROOT: workspace,
+      CLAUDE_PLUGIN_DATA: path.join(workspace, ".cc-suite", "runtime"),
+    },
   });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);

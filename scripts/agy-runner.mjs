@@ -57,7 +57,7 @@ import {
 } from "./lib/process.mjs";
 import { withDelegationBoundary } from "./lib/delegation-boundary.mjs";
 
-const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — matches codex-runner
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes — matches codex-runner
 const HEARTBEAT_MS = 30 * 1000;
 const SIGKILL_GRACE_MS = 5 * 1000;
 

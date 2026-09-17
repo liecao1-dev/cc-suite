@@ -29,11 +29,15 @@ function run(script, cwd, catalog = null) {
   return spawnSync("bash", [script], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, ...(catalog ? { CC_SUITE_CODEX_CATALOG_FILE: catalog } : {}) },
+    env: {
+      ...process.env,
+      HOME: cwd,
+      ...(catalog ? { CC_SUITE_CODEX_CATALOG_FILE: catalog } : {}),
+    },
   });
 }
 
-test("installer creates exact /codex and $claude entries plus hooks idempotently", () => {
+test("installer creates local selectors plus stable user-level hooks idempotently", () => {
   const workspace = makeTempDir();
   try {
     const catalog = fixture(workspace);
@@ -47,15 +51,17 @@ test("installer creates exact /codex and $claude entries plus hooks idempotently
     assert.equal(fs.existsSync(path.join(workspace, ".claude", "commands", "codex.md")), false);
     assert.equal(fs.lstatSync(path.join(workspace, ".agents", "skills", "claude")).isSymbolicLink(), true);
     const codexHooks = fs.readFileSync(path.join(workspace, ".codex", "hooks.json"), "utf8");
-    const claudeHooks = fs.readFileSync(path.join(workspace, ".claude", "settings.local.json"), "utf8");
-    assert.match(codexHooks, /dispatch-hook\.mjs.*--host codex --target claude/);
-    assert.match(claudeHooks, /dispatch-hook\.mjs.*--host claude --target codex/);
+    const claudeHooks = fs.readFileSync(path.join(workspace, ".claude", "settings.json"), "utf8");
+    assert.match(codexHooks, /cc-suite-dispatch-hook.*--host codex --target claude/);
+    assert.match(claudeHooks, /cc-suite-dispatch-hook.*--host claude --target codex/);
+    assert.equal(fs.existsSync(path.join(workspace, ".claude", "settings.local.json")), false);
+    assert.equal(fs.existsSync(path.join(workspace, ".cc-suite", "project.json")), false);
 
     const second = run(installScript, workspace, catalog);
     assert.equal(second.status, 0, second.stderr);
     assert.equal(fs.readFileSync(codexSkill, "utf8"), content);
     assert.equal(fs.readFileSync(path.join(workspace, ".codex", "hooks.json"), "utf8"), codexHooks);
-    assert.equal(fs.readFileSync(path.join(workspace, ".claude", "settings.local.json"), "utf8"), claudeHooks);
+    assert.equal(fs.readFileSync(path.join(workspace, ".claude", "settings.json"), "utf8"), claudeHooks);
   } finally { cleanupDir(workspace); }
 });
 
@@ -75,7 +81,7 @@ test("installer and uninstaller preserve an edited generated skill", () => {
   } finally { cleanupDir(workspace); }
 });
 
-test("uninstaller removes unchanged exact entries and managed hook handlers", () => {
+test("single-project uninstaller removes local selectors but leaves user-level hooks", () => {
   const workspace = makeTempDir();
   try {
     const catalog = fixture(workspace);
@@ -83,7 +89,8 @@ test("uninstaller removes unchanged exact entries and managed hook handlers", ()
     assert.equal(run(uninstallScript, workspace).status, 0);
     assert.equal(fs.existsSync(path.join(workspace, ".claude", "skills", "codex")), false);
     assert.equal(fs.existsSync(path.join(workspace, ".agents", "skills", "claude")), false);
-    assert.equal(fs.existsSync(path.join(workspace, ".codex", "hooks.json")), false);
+    assert.equal(fs.existsSync(path.join(workspace, ".codex", "hooks.json")), true);
+    assert.equal(fs.existsSync(path.join(workspace, ".claude", "settings.json")), true);
     assert.equal(fs.existsSync(path.join(workspace, ".claude", "settings.local.json")), false);
     assert.equal(fs.existsSync(path.join(workspace, ".cc-suite", "project.json")), false);
   } finally { cleanupDir(workspace); }

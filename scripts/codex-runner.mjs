@@ -37,11 +37,17 @@ import {
   waitForExit,
 } from "./lib/process.mjs";
 import { extractErrorEvent, resolveFailureMessage } from "./lib/codex-errors.mjs";
+import { readStdinSync } from "./lib/hook-input.mjs";
 import { withDelegationBoundary } from "./lib/delegation-boundary.mjs";
 import { TARGETS } from "./lib/dispatch-config.mjs";
 import { recordRecentDispatch } from "./lib/dispatch-state.mjs";
+import { resolveScopedWorkspace } from "./lib/scoped-dispatch.mjs";
+import {
+  requireCompatibleCodexCli,
+  resolveActivatedCliBinary,
+} from "./lib/activated-cli.mjs";
 
-const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes
 const HEARTBEAT_MS = 30 * 1000;
 const SIGKILL_GRACE_MS = 5 * 1000;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -154,7 +160,7 @@ function parseArgs(argv) {
       process.stderr.write("Error: use either --prompt-stdin or -- <prompt>, not both\n");
       process.exit(1);
     }
-    args.prompt = fs.readFileSync(0, "utf8");
+    args.prompt = readStdinSync({ maxWaitMs: 30_000 });
   }
 
   if (args.model && !MODEL_ID.test(args.model)) {
@@ -196,7 +202,10 @@ function buildCodexArgs(args, lastMessageFile) {
   codexArgs.push("-c", `model_reasoning_effort=${args.effort}`);
   codexArgs.push("-c", `approval_policy=${JSON.stringify(args.approval)}`);
   codexArgs.push("-o", lastMessageFile);
-  codexArgs.push(args.prompt);
+  // A delegated context can be much larger than the operating system's argv
+  // limit.  Codex accepts `-` as an explicit stdin prompt, so keep the command
+  // line bounded and close stdin immediately after the complete prompt bytes.
+  codexArgs.push("-");
   return codexArgs;
 }
 
@@ -214,7 +223,10 @@ function extractThreadId(line) {
 
 function readLastMessage(file) {
   try {
-    return fs.readFileSync(file, "utf8").trim();
+    // The output-last-message file is already the target model's answer.
+    // Preserve its exact bytes so workflow delivery does not normalize
+    // leading/trailing whitespace on the way back to the calling process.
+    return fs.readFileSync(file, "utf8");
   } catch {
     return "";
   }
@@ -232,7 +244,8 @@ function executeCodex(cwd, args, logFile) {
     const boundedArgs = { ...args, prompt: withDelegationBoundary(args.prompt) };
     const codexArgs = buildCodexArgs(boundedArgs, lastMessageFile);
 
-    appendLog(logFile, `Exec: codex ${codexArgs.slice(0, -1).join(" ")} <prompt>`);
+    appendLog(logFile, `Exec: ${args.codexBinary} ${codexArgs.slice(0, -1).join(" ")} <prompt-stdin>`);
+    appendLog(logFile, `Codex CLI: ${args.codexVersion}`);
     appendLog(logFile, `Model: ${args.model}, Effort: ${args.effort}, Sandbox: ${args.resume ? "(inherited via resume)" : args.sandbox}, Approval: ${args.approval}`);
     appendLog(logFile, `Deadline: ${Math.round(args.timeoutMs / 1000)}s`);
 
@@ -244,17 +257,15 @@ function executeCodex(cwd, args, logFile) {
     let settled = false;
     let timedOut = false;
 
-    // stdio[0] = "ignore" tells Node to open /dev/null and attach it to the
-    // child's fd 0 — equivalent to running `codex exec ... < /dev/null` from a
-    // shell. Required because `codex exec` can hang on stdin in background /
-    // hook contexts that lack a controlling TTY. Do not change to "pipe" or
-    // "inherit" without preserving an explicit /dev/null on stdin.
+    // stdin is a private pipe containing the already-complete prompt.  Ending
+    // it immediately preserves the old non-TTY/no-controlling-terminal
+    // guarantee while avoiding ARG_MAX failures for a large saved context.
     // detached:true makes the child a process-group leader (POSIX), so the
     // deadline can terminate the whole group — codex tool subprocesses
     // included — instead of only the direct child.
-    const child = spawn("codex", codexArgs, {
+    const child = spawn(args.codexBinary, codexArgs, {
       cwd,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env },
       detached: true,
     });
@@ -273,6 +284,8 @@ function executeCodex(cwd, args, logFile) {
       }
     });
     const releaseSignals = installChildSignalForwarding(child);
+    child.stdin.on("error", () => {});
+    child.stdin.end(boundedArgs.prompt);
 
     let killTimer = null;
 
@@ -573,7 +586,9 @@ async function main() {
   }
 
   const executionCwd = process.cwd();
-  const stateRoot = resolveWorkspaceRoot(executionCwd);
+  const { scopeRoot, workspaceRoot: stateRoot } = resolveScopedWorkspace(executionCwd);
+  args.codexBinary = resolveActivatedCliBinary(scopeRoot, "codex");
+  args.codexVersion = requireCompatibleCodexCli(args.codexBinary).version;
 
   // Detached background worker spawned by runBackground: do the actual work.
   const backgroundJobId = process.env.CODEX_TOOLKIT_BACKGROUND_JOB_ID;

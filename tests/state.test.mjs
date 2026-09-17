@@ -142,6 +142,39 @@ test("saveState prunes jobs exceeding MAX_JOBS (50)", () => {
   }
 });
 
+test("saveState retains a terminal job referenced by programmatic idempotency state", () => {
+  const workspace = makeTempDir();
+  try {
+    const jobs = Array.from({ length: 51 }, (_, i) => {
+      const jobId = `replay-job-${i}`;
+      const updatedAt = new Date(Date.UTC(2026, 0, 1, 0, i, 0)).toISOString();
+      const jobFile = resolveJobFile(workspace, jobId);
+      fs.writeFileSync(jobFile, JSON.stringify({ rawOutput: `result ${i}` }), "utf8");
+      return { id: jobId, status: "completed", updatedAt };
+    });
+    saveState(workspace, {
+      version: 1,
+      config: {
+        programmaticDispatches: {
+          retained: {
+            status: "completed",
+            terminal: { status: "completed", jobId: "replay-job-0" },
+          },
+        },
+      },
+      jobs,
+    });
+
+    const loaded = loadState(workspace);
+    assert.equal(loaded.jobs.length, 50);
+    assert.notEqual(loaded.jobs.find((job) => job.id === "replay-job-0"), undefined);
+    assert.equal(readJobFile(resolveJobFile(workspace, "replay-job-0")).rawOutput, "result 0");
+    assert.equal(loaded.jobs.find((job) => job.id === "replay-job-1"), undefined);
+  } finally {
+    cleanupDir(workspace);
+  }
+});
+
 test("upsertJob inserts a new job", () => {
   const workspace = makeTempDir();
   try {

@@ -19,14 +19,15 @@ implement、review、plan、audit 或 debug 分类。
 2. 运行：
 
    ```bash
+   scope="${CC_SUITE_SCOPE_ROOT:-$PWD}"
    node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-projects.mjs" sync \
-     --scope "$PWD" --project "$PWD" --source "${CLAUDE_PLUGIN_ROOT}"
+     --scope "$scope" --project "$PWD" --source "${CLAUDE_PLUGIN_ROOT}"
    ```
 
 3. 若成功，只报告：
 
    ```text
-   cc-suite 已为当前项目安装派遣入口和 hooks。
+   cc-suite 已为当前项目安装派遣入口，并配置范围受限的稳定用户级 hooks。
    Claude：选择 /codex → 选完配置 → 写任务 → 只发送任务
    Codex：选择 $claude → 选完配置 → 写任务 → 只发送任务
    若上级项目范围尚未启用 composer 代理，还需为那个范围运行 activate-composer.mjs install，并从新终端启动 CLI。

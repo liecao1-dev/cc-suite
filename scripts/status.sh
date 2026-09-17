@@ -111,36 +111,31 @@ if [ -f .claude/commands/codex.md ]; then
   mark "/codex exact command" warn "user/legacy command may collide with the dispatcher skill"
 fi
 
-_dispatch_script="${SCRIPT_DIR}/dispatch-hook.mjs"
-if [ -f .codex/hooks.json ] && grep -Fq "${_dispatch_script}" .codex/hooks.json && grep -Fq -- '--host codex --target claude' .codex/hooks.json; then
-  mark "Codex dispatch hook" ok 'installed — Codex separately reviews the current command hash via /hooks'
-else
-  mark "Codex dispatch hook" miss 'run /cc-suite:repair and trust the project'
-fi
-if [ -f .claude/settings.local.json ] && grep -Fq "${_dispatch_script}" .claude/settings.local.json && grep -Fq -- '--host claude --target codex' .claude/settings.local.json; then
-  mark "Claude dispatch hooks" ok 'consume the selected tuple; submitted /codex fails closed'
-else
-  mark "Claude dispatch hooks" miss 'run /cc-suite:repair and trust the project'
-fi
-
-# The shell activation is global only as a PATH lookup; its owned shims bypass
-# immediately unless this cwd is inside the marker's explicit scope.
-_composer_scope="$(python3 -c '
-import json
-try:
-    value = json.load(open(".cc-suite/project.json")).get("scopeRoot", "")
-    print(value if isinstance(value, str) else "")
-except Exception:
-    pass
-' 2>/dev/null || true)"
+# User-level hooks point at one stable launcher. Their process is a true no-op
+# outside this scope and when no selector has been armed.
+_composer_scope="${CC_SUITE_SCOPE_ROOT:-${CC_SUITE_COMPOSER_SCOPE:-}}"
 if [ -n "$_composer_scope" ]; then
+  _dispatch_launcher="${_composer_scope}/.cc-suite/bin/cc-suite-dispatch-hook"
+  _codex_home="${CODEX_HOME:-${HOME}/.codex}"
+  if [ -f "${_codex_home}/hooks.json" ] && grep -Fq "${_dispatch_launcher}" "${_codex_home}/hooks.json" && grep -Fq -- '--host codex --target claude' "${_codex_home}/hooks.json"; then
+    mark "Codex dispatch hook" ok 'stable user-level definition; review once via /hooks'
+  else
+    mark "Codex dispatch hook" miss 'run /cc-suite:repair, then review the user-level hook once'
+  fi
+  if [ -f "${HOME}/.claude/settings.json" ] && grep -Fq "${_dispatch_launcher}" "${HOME}/.claude/settings.json" && grep -Fq -- '--host claude --target codex' "${HOME}/.claude/settings.json"; then
+    mark "Claude dispatch hooks" ok 'stable user-level definitions with runtime scope gate'
+  else
+    mark "Claude dispatch hooks" miss 'run /cc-suite:repair'
+  fi
   if node "${SCRIPT_DIR}/activate-composer.mjs" status --scope "$_composer_scope" >/dev/null 2>&1; then
     mark "Composer pre-send proxy" ok "active for scope ${_composer_scope} (new CLI sessions)"
   else
     mark "Composer pre-send proxy" miss "run activate-composer.mjs install --scope ${_composer_scope}, then start a new terminal"
   fi
 else
-  mark "Composer pre-send proxy" miss "project marker has no scopeRoot — run /cc-suite:repair"
+  mark "Codex dispatch hook" miss "scope environment unavailable — start through the scoped CLI shim"
+  mark "Claude dispatch hooks" miss "scope environment unavailable — start through the scoped CLI shim"
+  mark "Composer pre-send proxy" miss "scope environment unavailable — run /cc-suite:repair"
 fi
 
 # .codex

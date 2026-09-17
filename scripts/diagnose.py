@@ -81,6 +81,25 @@ def check(cid: str, label: str, status: str, detail: str,
     }
 
 
+def dispatch_scope() -> Path | None:
+    configured = os.environ.get("CC_SUITE_SCOPE_ROOT") or os.environ.get("CC_SUITE_COMPOSER_SCOPE")
+    if configured:
+        try:
+            return Path(configured).expanduser().resolve(strict=True)
+        except OSError:
+            return None
+    for candidate in (ROOT, *ROOT.parents):
+        manifest = _load_json(candidate / ".cc-suite/user-dispatch.json")
+        if (
+            isinstance(manifest, dict)
+            and manifest.get("managedBy") == "cc-suite"
+            and manifest.get("schema") == 1
+            and manifest.get("scopeRoot") == str(candidate.resolve())
+        ):
+            return candidate.resolve()
+    return None
+
+
 def script(name: str) -> str:
     # shlex.quote: these strings are executed by the wrapper's shell — a path
     # containing quotes/backticks/$() must never become shell-active.
@@ -238,26 +257,36 @@ def check_dispatchers(enabled: list[str]) -> list[dict]:
         out.append(check("codex_exact_command", "/codex exact command", "info",
                          "a user/legacy exact command is preserved and may collide with the dispatcher skill"))
 
-    hook_script = str(PLUGIN_ROOT / "scripts/dispatch-hook.mjs")
-    codex_hooks = _read(ROOT / ".codex/hooks.json") or ""
-    if hook_script in codex_hooks and "--host codex --target claude" in codex_hooks:
+    scope = dispatch_scope()
+    launcher = str(scope / ".cc-suite/bin/cc-suite-dispatch-hook") if scope else ""
+    user_manifest = _load_json(scope / ".cc-suite/user-dispatch.json") if scope else None
+    configured_codex_hooks = user_manifest.get("codexHooks") if isinstance(user_manifest, dict) else None
+    codex_hooks_path = Path(configured_codex_hooks) if isinstance(configured_codex_hooks, str) else (
+        Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser() / "hooks.json"
+    )
+    codex_hooks = _read(codex_hooks_path) or ""
+    if launcher and launcher in codex_hooks and "--host codex --target claude" in codex_hooks:
         out.append(check("codex_dispatch_hook", "Codex dispatch hook", "healthy",
-                         "installed; Codex separately requires the current command hash to be trusted via /hooks"))
+                         "stable user-level definition; Codex requires one review via /hooks"))
     else:
         out.append(check("codex_dispatch_hook", "Codex dispatch hook", "issue",
-                         "project-local UserPromptSubmit handler is missing",
+                         "scope-gated user-level UserPromptSubmit handler is missing",
                          auto=[f"bash {script('install_dispatchers.sh')}"],
-                         manual="repair, then trust this project in Codex"))
+                         manual="repair, then trust the user-level cc-suite hook once in Codex"))
 
-    claude_hooks = _read(ROOT / ".claude/settings.local.json") or ""
-    if hook_script in claude_hooks and "--host claude --target codex" in claude_hooks:
+    configured_claude_settings = user_manifest.get("claudeSettings") if isinstance(user_manifest, dict) else None
+    claude_settings_path = Path(configured_claude_settings) if isinstance(configured_claude_settings, str) else (
+        Path.home() / ".claude/settings.json"
+    )
+    claude_hooks = _read(claude_settings_path) or ""
+    if launcher and launcher in claude_hooks and "--host claude --target codex" in claude_hooks:
         out.append(check("claude_dispatch_hooks", "Claude dispatch hooks", "healthy",
-                         "task-submit handler and fail-closed /codex expansion guard are installed"))
+                         "stable user-level task-submit and /codex guards are scope-gated"))
     else:
         out.append(check("claude_dispatch_hooks", "Claude dispatch hooks", "issue",
-                         "project-local dispatch handlers are missing",
+                         "scope-gated user-level dispatch handlers are missing",
                          auto=[f"bash {script('install_dispatchers.sh')}"],
-                         manual="repair, then trust this project in Claude Code"))
+                         manual="repair the cc-suite user-level hook definitions"))
 
     missing = []
     unsafe = []
@@ -288,12 +317,10 @@ def check_composer_activation(enabled: list[str]) -> dict:
     if "codex" not in enabled:
         return check("composer_activation", "Composer pre-send proxy", "expected_absent",
                      "Codex dispatch is not enabled")
-    marker = _load_json(ROOT / ".cc-suite/project.json")
-    scope_value = marker.get("scopeRoot") if isinstance(marker, dict) else None
-    if not isinstance(scope_value, str) or not scope_value:
+    scope = dispatch_scope()
+    if scope is None:
         return check("composer_activation", "Composer pre-send proxy", "skipped",
-                     "project dispatch marker has no scopeRoot; run the project repair first")
-    scope = Path(scope_value).expanduser().resolve()
+                     "scope environment is unavailable; start through the scoped CLI shim")
     manifest = scope / ".cc-suite/composer-activation.json"
     command = (f"node {script('activate-composer.mjs')} install --scope "
                f"{shlex.quote(str(scope))}")

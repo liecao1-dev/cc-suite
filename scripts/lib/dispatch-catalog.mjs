@@ -9,6 +9,7 @@ import {
   validateAgainstCatalog,
 } from "./dispatch-config.mjs";
 import { resolveWorkspaceRoot } from "./workspace.mjs";
+import { configuredScopeRoot } from "./scoped-dispatch.mjs";
 
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const CODEX_EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
@@ -206,10 +207,6 @@ export function readTopLevelTomlConfig(file) {
   return result;
 }
 
-function markerFor(root) {
-  return readJsonObject(path.join(root, ".cc-suite", "project.json"));
-}
-
 function overrideFile(root) {
   return path.join(root, ".cc-suite", "dispatch-defaults.json");
 }
@@ -265,8 +262,7 @@ function resolveClaudeConfiguredDefault(cwd, home) {
 }
 
 function applyDispatchOverrides(target, configured, root) {
-  const marker = markerFor(root);
-  const scope = typeof marker?.scopeRoot === "string" ? marker.scopeRoot : root;
+  const scope = configuredScopeRoot() ?? root;
   const fields = target === "codex"
     ? { model: "model", effort: "effort", access: "access", approval: "approval" }
     : { model: "model", effort: "effort", access: "access" };
