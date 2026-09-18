@@ -85,6 +85,37 @@ function writeActivation(scope, claudeBinary) {
   }));
 }
 
+test("localchat uses scope activation while limiting the native Claude tools to the exact workspace", () => {
+  const scope = makeTempDir("claude-localchat-");
+  let policyFd;
+  try {
+    const workspace=path.join(scope,"project/sub"),bin=path.join(scope,"bin"),home=path.join(scope,"home");
+    for(const directory of [workspace,bin,home])fs.mkdirSync(directory,{recursive:true});
+    writeFakeClaude(bin);writeActivation(scope,path.join(bin,"claude"));
+    const canonical=fs.realpathSync(workspace),policyFile=path.join(scope,"policy.json"),callFile=path.join(scope,"call.json");
+    fs.writeFileSync(policyFile,JSON.stringify({schema:1,target:'claude',mode:'read-only',workspace:canonical}));
+    policyFd=fs.openSync(policyFile,'r');
+    const result=spawnSync(process.execPath,[RUNNER,'--model','opus','--effort','high','--permission-mode','plan','--timeout-ms','5000','--prompt-stdin'],{
+      cwd:workspace,input:'只读任务',encoding:'utf8',stdio:['pipe','pipe','pipe',policyFd],
+      env:{...process.env,HOME:home,PATH:`${bin}:${process.env.PATH??''}`,CAPTURE_CALL:callFile,CC_SUITE_SCOPE_ROOT:scope,CC_SUITE_WORKSPACE_ROOT:canonical,CC_SUITE_LOCALCHAT_POLICY_FD:'3'},
+    });
+    assert.equal(result.status,0,result.stderr);
+    assert.equal(JSON.parse(result.stdout).cliStarted,true);
+    const call=JSON.parse(fs.readFileSync(callFile,'utf8')),value=flag=>call.argv[call.argv.indexOf(flag)+1];
+    assert.equal(value('--add-dir'),canonical);
+    assert.equal(value('--tools'),'Read');
+    assert.equal(value('--permission-mode'),'plan');
+    assert.equal(value('--effort'),'high');
+    assert.ok(call.argv.includes('--strict-mcp-config'));
+    assert.deepEqual(JSON.parse(value('--mcp-config')),{mcpServers:{}});
+    const settings=JSON.parse(value('--settings'));
+    assert.deepEqual(settings.sandbox.filesystem.allowRead,[canonical]);
+    assert.deepEqual(settings.sandbox.filesystem.allowWrite,[]);
+    assert.match(call.prompt,/^This request already reached you by delegation from Chat through localchat\./);
+    assert.ok(call.prompt.endsWith('只读任务'));
+  }finally{if(policyFd!==undefined)fs.closeSync(policyFd);cleanupDir(scope);}
+});
+
 test("Claude runner uses the current CLI stream, returns a session id, and keeps the user's active subdirectory", () => {
   const scope = makeTempDir("claude-runner-");
   try {

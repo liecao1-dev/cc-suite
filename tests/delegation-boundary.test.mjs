@@ -92,7 +92,9 @@ test("both direct CLI runners apply the correct no-bounce boundary", () => {
   const codexRunner = readScript("codex-runner.mjs");
   const claudeRunner = readScript("claude-runner.mjs");
   assert.match(codexRunner, /withDelegationBoundary\(args\.prompt\)/);
-  assert.match(claudeRunner, /withClaudeDelegationBoundary\(args\.prompt\)/);
+  // The normal Claude prompt includes document-tool guidance before the task.
+  // claude-runner.test.mjs also checks the prompt received by the fake native CLI.
+  assert.match(claudeRunner, /withClaudeDelegationBoundary\(\s*\[documentTools\.instructions, args\.prompt\]\.filter\(Boolean\)\.join\("\\n\\n"\),?\s*\)/);
   for (const sentence of BOUNDARY_INVARIANTS) {
     assert.ok(DELEGATION_BOUNDARY.includes(sentence));
     assert.ok(CLAUDE_DELEGATION_BOUNDARY.includes(sentence));

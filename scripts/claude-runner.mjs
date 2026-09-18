@@ -26,6 +26,7 @@ import { resolveActivatedCliBinary } from "./lib/activated-cli.mjs";
 import { readStdinSync } from "./lib/hook-input.mjs";
 import { withoutClaudeEnvironmentAuth } from "./lib/claude-oauth-refresh.mjs";
 import { prepareClaudeDocumentTools } from "./lib/claude-document-tools.mjs";
+import { readLocalchatPolicy, claudeReadonlySettings, localchatPrompt } from "./lib/localchat-policy.mjs";
 
 const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
 const MAX_TIMER_MS = 2_147_483_647;
@@ -58,6 +59,8 @@ const PERMISSION_MODES = new Set([
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 let activeJob = null;
+let localchatPolicy = null;
+let cliStarted = false;
 
 function fail(message) {
   process.stderr.write(`Error: ${message}\n`);
@@ -168,7 +171,7 @@ function resolveClaudeAccess(cwd) {
   if (!isWithin(scopeRoot, workspaceRoot)) {
     throw new Error(`Claude workspace ${workspaceRoot} is outside readable scope ${scopeRoot}`);
   }
-  return { executionCwd, scopeRoot, workspaceRoot };
+  return { executionCwd, activationScopeRoot: scopeRoot, scopeRoot: localchatPolicy ? workspaceRoot : scopeRoot, workspaceRoot };
 }
 
 function absolutePermissionRule(tool, target) {
@@ -177,10 +180,12 @@ function absolutePermissionRule(tool, target) {
 }
 
 function effectiveClaudePermissionMode(requested) {
+  if (localchatPolicy) return requested;
   return requested === "plan" ? "plan" : "dontAsk";
 }
 
 function buildClaudeSettings(access, requestedPermissionMode, toolPolicy, documentTools) {
+  if (localchatPolicy) return claudeReadonlySettings(access.workspaceRoot);
   const allow = [
     ...(toolPolicy === "standard" ? BASE_ALLOWED_TOOLS : []),
     absolutePermissionRule("Read", access.scopeRoot),
@@ -236,7 +241,10 @@ function directClaudeArgs(args, access, settings, mcpServers) {
   ];
   if (args.toolPolicy === "none") {
     result.push("--tools", "");
+  } else if (localchatPolicy) {
+    result.push("--tools", "Read");
   }
+  if (localchatPolicy) result.push("--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}');
   if (mcpServers.klode) {
     result.push("--mcp-config", JSON.stringify({ mcpServers }));
   }
@@ -314,21 +322,21 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
     const access = resolveClaudeAccess(cwd);
     const effectivePermission = effectiveClaudePermissionMode(args.permissionMode);
     const childEnv = withoutClaudeEnvironmentAuth(process.env);
-    const documentTools = args.toolPolicy === "standard" && effectivePermission !== "plan"
+    const documentTools = !localchatPolicy && args.toolPolicy === "standard" && effectivePermission !== "plan"
       ? prepareClaudeDocumentTools(access, { env: childEnv })
       : { allow: [], env: childEnv, instructions: "" };
     const settings = buildClaudeSettings(access, args.permissionMode, args.toolPolicy, documentTools);
-    const mcpServers = args.toolPolicy === "standard" ? loadKlodeMcpServers() : {};
+    const mcpServers = !localchatPolicy && args.toolPolicy === "standard" ? loadKlodeMcpServers() : {};
     const argv = directClaudeArgs(args, access, settings, mcpServers);
-    const prompt = withClaudeDelegationBoundary(
+    const prompt = localchatPolicy ? localchatPrompt('claude', args.prompt) : withClaudeDelegationBoundary(
       [documentTools.instructions, args.prompt].filter(Boolean).join("\n\n"),
     );
-    const claudeBinary = resolveActivatedCliBinary(access.scopeRoot, "claude");
+    const claudeBinary = resolveActivatedCliBinary(access.activationScopeRoot, "claude");
     appendLog(logFile, `Claude process attempt: ${attemptNumber}/2`);
     appendLog(logFile, `Exec: ${claudeBinary} ${argv.join(" ")} <prompt-stdin>`);
     appendLog(logFile, `Model: ${args.model}, Effort: ${args.effort}, Permission: ${args.permissionMode} (effective ${effectivePermission}), Tools: ${args.toolPolicy}, Current host CLI with project-local transcript continuity`);
     appendLog(logFile, `CWD: ${access.executionCwd}`);
-    appendLog(logFile, `Access: read ${access.scopeRoot}; write ${access.workspaceRoot}`);
+    appendLog(logFile, `Access: read ${access.scopeRoot}; write ${localchatPolicy ? "none" : access.workspaceRoot}`);
     appendLog(logFile, `Klode MCP: ${mcpServers.klode ? "forwarded from user registration" : "not registered"}`);
     appendLog(logFile, `Deadline: ${Math.round(args.timeoutMs / 1000)}s`);
     const child = spawn(claudeBinary, argv, {
@@ -337,7 +345,7 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
-    child.once("spawn", () => recordRecentAfterSpawn(cwd, args, logFile));
+    child.once("spawn", () => { cliStarted = true; recordRecentAfterSpawn(cwd, args, logFile); });
     const releaseSignals = installChildSignalForwarding(child);
     let stdoutBuffer = "";
     let stderr = "";
@@ -457,6 +465,10 @@ function executeClaude(cwd, args, logFile) {
 
 async function main() {
   const args = parseArgs(process.argv);
+  localchatPolicy = readLocalchatPolicy();
+  if (localchatPolicy && (localchatPolicy.target !== "claude" || args.resume || !["plan", "dontAsk"].includes(args.permissionMode))) {
+    throw new Error("Localchat M0 requires a fresh read-only Claude call");
+  }
   const executionCwd = process.cwd();
   // The broker fixes one workspace for the whole composer session.  Reusing
   // that root is essential for non-Git projects: recomputing from a nested cwd
@@ -494,7 +506,7 @@ async function main() {
   });
   activeJob = null;
 
-  process.stdout.write(`${JSON.stringify({ jobId, ...result })}\n`);
+  process.stdout.write(`${JSON.stringify({ jobId, ...result, ...(localchatPolicy ? { cliStarted } : {}) })}\n`);
   if (result.status !== "completed") process.exitCode = 1;
 }
 

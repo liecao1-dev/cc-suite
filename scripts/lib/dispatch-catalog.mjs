@@ -90,11 +90,11 @@ export function catalogFromCodexModelsCache(payload) {
 }
 
 function commandOutput(command, args) {
-  const result = spawnSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const result = spawnSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 5000, maxBuffer: 1024 * 1024 });
   return result.status === 0 ? result.stdout.trim() : "";
 }
 
-function readCodexCatalog(home) {
+function readCodexCatalog(home, binary = "codex") {
   const file = path.join(home, ".codex", "models_cache.json");
   let payload;
   try {
@@ -103,7 +103,7 @@ function readCodexCatalog(home) {
     throw new Error(`无法读取 Codex 模型目录 ${file}: ${error.message}`);
   }
   const catalog = catalogFromCodexModelsCache(payload);
-  catalog.metadata.codexVersion = commandOutput("codex", ["--version"]) || null;
+  catalog.metadata.codexVersion = commandOutput(binary, ["--version"]) || null;
   return catalog;
 }
 
@@ -167,10 +167,10 @@ export function catalogFromClaudeHelp(help, version = null) {
   };
 }
 
-function readClaudeCatalog() {
-  const help = commandOutput("claude", ["--help"]);
+function readClaudeCatalog(binary = "claude") {
+  const help = commandOutput(binary, ["--help"]);
   if (!help) throw new Error("Claude Code CLI 不可用，无法读取模型规则");
-  return catalogFromClaudeHelp(help, commandOutput("claude", ["--version"]) || null);
+  return catalogFromClaudeHelp(help, commandOutput(binary, ["--version"]) || null);
 }
 
 function readJsonObject(file) {
@@ -222,8 +222,8 @@ function applyLayer(current, sources, layer, source, fields) {
   }
 }
 
-function resolveCodexConfiguredDefault(cwd, home) {
-  const root = resolveWorkspaceRoot(cwd);
+function resolveCodexConfiguredDefault(cwd, home, workspaceRoot) {
+  const root = workspaceRoot ?? resolveWorkspaceRoot(cwd);
   const current = {};
   const sources = {};
   const fields = {
@@ -239,8 +239,8 @@ function resolveCodexConfiguredDefault(cwd, home) {
   return { current, sources, root };
 }
 
-function resolveClaudeConfiguredDefault(cwd, home) {
-  const root = resolveWorkspaceRoot(cwd);
+function resolveClaudeConfiguredDefault(cwd, home, workspaceRoot) {
+  const root = workspaceRoot ?? resolveWorkspaceRoot(cwd);
   const current = {};
   const sources = {};
   const fields = { model: "model", effort: "effortLevel", access: "permissionMode" };
@@ -261,8 +261,8 @@ function resolveClaudeConfiguredDefault(cwd, home) {
   return { current, sources, root };
 }
 
-function applyDispatchOverrides(target, configured, root) {
-  const scope = configuredScopeRoot() ?? root;
+function applyDispatchOverrides(target, configured, root, scopeRoot) {
+  const scope = scopeRoot ?? configuredScopeRoot() ?? root;
   const fields = target === "codex"
     ? { model: "model", effort: "effort", access: "access", approval: "approval" }
     : { model: "model", effort: "effort", access: "access" };
@@ -299,11 +299,11 @@ function sourceSummary(sources) {
 export function getDispatchEnvironment(target, cwd, options = {}) {
   if (!Object.hasOwn(TARGETS, target)) throw new Error(`unsupported dispatch target: ${target}`);
   const home = options.home ?? os.homedir();
-  const catalog = target === "codex" ? readCodexCatalog(home) : readClaudeCatalog();
+  const catalog = target === "codex" ? readCodexCatalog(home, options.cliBinary) : readClaudeCatalog(options.cliBinary);
   const configured = target === "codex"
-    ? resolveCodexConfiguredDefault(cwd, home)
-    : resolveClaudeConfiguredDefault(cwd, home);
-  applyDispatchOverrides(target, configured, configured.root);
+    ? resolveCodexConfiguredDefault(cwd, home, options.workspaceRoot)
+    : resolveClaudeConfiguredDefault(cwd, home, options.workspaceRoot);
+  applyDispatchOverrides(target, configured, configured.root, options.scopeRoot);
 
   const model = configured.current.model || catalog.defaultModel;
   if (target === "claude") includeClaudeModel(catalog, model);

@@ -38,6 +38,7 @@ import {
 } from "./lib/process.mjs";
 import { extractErrorEvent, resolveFailureMessage } from "./lib/codex-errors.mjs";
 import { readStdinSync } from "./lib/hook-input.mjs";
+import { readLocalchatPolicy, localchatPrompt } from "./lib/localchat-policy.mjs";
 import { withDelegationBoundary } from "./lib/delegation-boundary.mjs";
 import { TARGETS } from "./lib/dispatch-config.mjs";
 import { recordRecentDispatch } from "./lib/dispatch-state.mjs";
@@ -56,6 +57,8 @@ const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 // detached worker). main()'s rejection handler marks it failed so a crash can
 // never leave a foreground job recorded as running forever.
 let activeJobId = null;
+let localchatPolicy = null;
+let cliStarted = false;
 
 // A value-taking flag must be followed by a real value. "" is the background
 // argv convention for "unset" and keeps its historical skip-the-flag behavior;
@@ -191,12 +194,12 @@ function appendLog(logFile, message) {
 // Build the `codex exec` argv. A fresh call takes -s/--sandbox; a resume call
 // inherits the original session's sandbox and rejects -s, so it is omitted.
 function buildCodexArgs(args, lastMessageFile) {
-  const codexArgs = ["exec"];
+  const codexArgs = localchatPolicy ? ["--strict-config", "exec"] : ["exec"];
   if (args.resume) {
     codexArgs.push("resume", args.resume);
   }
   if (args.model) codexArgs.push("--model", args.model);
-  if (!args.resume) codexArgs.push("--sandbox", args.sandbox);
+  if (!args.resume && !localchatPolicy) codexArgs.push("--sandbox", args.sandbox);
   codexArgs.push("--skip-git-repo-check");
   codexArgs.push("--json");
   codexArgs.push("-c", `model_reasoning_effort=${args.effort}`);
@@ -241,7 +244,7 @@ function executeCodex(cwd, args, logFile) {
       os.tmpdir(),
       `codex-last-${process.pid}-${Date.now()}.txt`
     );
-    const boundedArgs = { ...args, prompt: withDelegationBoundary(args.prompt) };
+    const boundedArgs = { ...args, prompt: localchatPolicy ? localchatPrompt('codex', args.prompt) : withDelegationBoundary(args.prompt) };
     const codexArgs = buildCodexArgs(boundedArgs, lastMessageFile);
 
     appendLog(logFile, `Exec: ${args.codexBinary} ${codexArgs.slice(0, -1).join(" ")} <prompt-stdin>`);
@@ -270,6 +273,7 @@ function executeCodex(cwd, args, logFile) {
       detached: true,
     });
     child.once("spawn", () => {
+      cliStarted = true;
       if (!args.recordRecent) return;
       try {
         recordRecentDispatch(cwd, "codex", {
@@ -473,6 +477,7 @@ async function runForeground(stateRoot, executionCwd, args) {
 
   const output = {
     jobId,
+    ...(localchatPolicy ? { cliStarted } : {}),
     status: result.status,
     threadId: result.threadId || null,
     rawOutput: result.rawOutput || "",
@@ -586,6 +591,10 @@ async function main() {
   }
 
   const executionCwd = process.cwd();
+  localchatPolicy = readLocalchatPolicy();
+  if (localchatPolicy && (localchatPolicy.target !== "codex" || args.resume || args.background || args.sandbox !== "read-only" || args.approval !== "never")) {
+    throw new Error("Localchat M0 requires a fresh read-only foreground Codex call");
+  }
   const { scopeRoot, workspaceRoot: stateRoot } = resolveScopedWorkspace(executionCwd);
   args.codexBinary = resolveActivatedCliBinary(scopeRoot, "codex");
   args.codexVersion = requireCompatibleCodexCli(args.codexBinary).version;

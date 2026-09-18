@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { cleanTargetEnvironment } from './lib/target-environment.mjs';
 import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
@@ -7,7 +8,6 @@ import path from "node:path";
 import process from "node:process";
 
 import { terminateProcessTree } from "./lib/process.mjs";
-import { withoutClaudeEnvironmentAuth } from "./lib/claude-oauth-refresh.mjs";
 
 const TOKEN_PATTERN = /^[a-f0-9]{32}$/;
 const SESSION_PATTERN = /^[a-f0-9]{32}$/;
@@ -87,33 +87,7 @@ function sameSecret(received, expected, pattern = SECRET_PATTERN) {
 }
 
 function cleanInheritedIdentity() {
-  const env = withoutClaudeEnvironmentAuth(process.env);
-  for (const key of Object.keys(env)) {
-    if (
-      key.startsWith("CC_SUITE_COMPOSER_")
-      || key.startsWith("CC_SUITE_DISPATCH_BROKER_")
-      || key === "CC_SUITE_PROGRAMMATIC_BROKER_GRANT"
-    ) delete env[key];
-  }
-  for (const key of [
-    "CODEX_CI",
-    "CODEX_SANDBOX",
-    "CODEX_SESSION_ID",
-    "CODEX_SHELL",
-    "CODEX_THREAD_ID",
-    "CODEX_TOOLKIT_BACKGROUND_JOB_ID",
-    "CODEX_TOOLKIT_SESSION_ID",
-    "CLAUDECODE",
-    "CLAUDE_CODE",
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_REMOTE",
-    "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_CODE_SSE_HOST",
-    "CLAUDE_CODE_SSE_PORT",
-  ]) delete env[key];
-  delete env.CC_SUITE_SCOPE_ROOT;
-  delete env.CC_SUITE_WORKSPACE_ROOT;
-  return env;
+  return cleanTargetEnvironment();
 }
 
 function executorEnvironment(scopeRoot, workspaceRoot) {
