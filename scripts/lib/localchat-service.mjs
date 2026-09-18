@@ -40,7 +40,7 @@ function privateDirectory(value) {
 }
 function privateJson(file) {
   const stat = fs.lstatSync(file);
-  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) || stat.uid !== process.getuid?.() || stat.size > MAX_REQUEST * 8) {
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) || stat.uid !== process.getuid?.() || stat.size > MAX_REQUEST * 32) {
     fail('INSECURE_STORAGE', 'Service data must be a private owned regular file');
   }
   return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -226,9 +226,12 @@ export function executeServiceProbe(client, request, frozen, environment, { onSp
         const code = /401|oauth|not logged|authentication|login required/i.test(message) ? 'AUTH_REQUIRED'
           : /429|quota|usage limit|rate.limit/i.test(message) ? 'QUOTA_OR_RATE_LIMIT'
           : /sandbox|permission denied|not permitted/i.test(message) ? 'PERMISSION_DENIED' : 'PROBE_FAILED';
-        return reject(new ServiceError(code, message));
+        const error = new ServiceError(code, message);
+        error.execution = { backend_session_id: result.threadId ?? null, job_id: result.jobId ?? null, reported_model: result.nativeModel ?? null, permission_denials: result.permissionDenials ?? [] };
+        return reject(error);
       }
-      resolveResult({ status: 'completed', raw_output: result.rawOutput, backend_session_id: result.threadId ?? null, job_id: result.jobId ?? null });
+      if (Buffer.byteLength(result.rawOutput) > 1024 * 1024) return reject(new ServiceError('RESULT_TOO_LARGE', 'Visible result exceeds 1 MiB'));
+      resolveResult({ status: 'completed', raw_output: result.rawOutput, backend_session_id: result.threadId ?? null, job_id: result.jobId ?? null, reported_model: result.nativeModel ?? null, permission_denials: result.permissionDenials ?? [] });
     });
   });
 }
@@ -236,7 +239,7 @@ export function executeServiceProbe(client, request, frozen, environment, { onSp
 export async function handleLocalchatRequest(scope, request, dependencies = {}) {
   if (Buffer.byteLength(JSON.stringify(request)) > MAX_REQUEST) fail('REQUEST_TOO_LARGE', 'Request is too large');
   const client = authenticate(scope, request);
-  if (!['capabilities','resolve','probe'].includes(request.operation)) fail('INVALID_OPERATION', 'Unsupported M0 operation');
+  if (!['capabilities','resolve','probe','prepare','run'].includes(request.operation)) fail('INVALID_OPERATION', 'Unsupported operation');
   if (request.operation === 'capabilities') {
     const backends = [];
     for (const backend of ['codex','claude']) {
@@ -247,22 +250,50 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
           supported_access: backend === 'codex' ? ['read-only'] : ['plan','dontAsk'], ...(backend === 'codex' ? { supported_approvals: ['never'] } : {}) });
       } catch (e) { backends.push({ backend, status: 'unavailable', error_code: e.code ?? 'CATALOG_UNAVAILABLE', message: e.message }); }
     }
-    return { schema: 1, stage: 'M0', workspace_id: client.workspaceId, backends, task_dispatch_available: false };
+    return { schema: 1, stage: 'M1', workspace_id: client.workspaceId, backends, task_dispatch_available: true, execution_deadline_seconds: 180 };
   }
   if (!['codex','claude'].includes(request.backend)) fail('INVALID_BACKEND', 'Choose codex or claude');
+  const isRun = request.operation === 'run';
+  let prepared;
+  if (isRun || request.operation === 'prepare') {
+    if (typeof request.request_id !== 'string' || !ID.test(request.request_id)) fail('INVALID_REQUEST', 'A stable request ID is required');
+    const preparedFile = path.join(client.clientDir, `prepared-${request.request_id}.json`);
+    if (isRun) {
+      if (request.selection !== undefined || request.overrides !== undefined || request.prompt !== undefined) fail('INVALID_REQUEST', 'Run accepts only a prepared request identity');
+      try { prepared = privateJson(preparedFile); } catch { fail('PREPARED_NOT_FOUND', 'Prepared execution is unavailable'); }
+      if (prepared.config.backend !== request.backend) fail('INVALID_BACKEND', 'Prepared execution belongs to another backend');
+    } else {
+      if (typeof request.prompt !== 'string' || !request.prompt.trim() || Buffer.byteLength(request.prompt) > 64000) fail('INVALID_REQUEST', 'Prepared context must be nonempty and at most 64000 bytes');
+      const fingerprint = hash({ backend: request.backend, selection: request.selection, overrides: request.overrides ?? {}, prompt: request.prompt });
+      if (fs.existsSync(preparedFile)) {
+        const prior = privateJson(preparedFile);
+        if (prior.fingerprint !== fingerprint) fail('REQUEST_CONFLICT', 'Prepared ID already belongs to different content');
+        return { request_id: request.request_id, config: prior.config, replayed: true };
+      }
+      const environment = (dependencies.environment ?? defaultEnvironment)(request.backend, client);
+      const config = resolve(client, request, environment);
+      try { save(preparedFile, { fingerprint, config, prompt: request.prompt }, true); }
+      catch (error) { if (error.code === 'EEXIST') return handleLocalchatRequest(scope, request, dependencies); throw error; }
+      return { request_id: request.request_id, config };
+    }
+  }
   let requestFile, fingerprint;
-  if (request.operation === 'probe') {
+  if (isRun) {
+    requestFile = path.join(client.clientDir, `execution-${request.request_id}.json`);
+    fingerprint = prepared.fingerprint;
+  } else if (request.operation === 'probe') {
     if (typeof request.request_id !== 'string' || !ID.test(request.request_id) || typeof request.prompt !== 'string' || !request.prompt.trim() || Buffer.byteLength(request.prompt) > 32000) fail('INVALID_PROBE', 'A stable request ID and bounded prompt are required');
     requestFile = path.join(client.clientDir, `request-${request.request_id}.json`);
     fingerprint = hash({ backend: request.backend, selection: request.selection, overrides: request.overrides ?? {}, workspace: client.workspace, prompt: request.prompt });
-    if (fs.existsSync(requestFile)) {
+  }
+  if (requestFile && fs.existsSync(requestFile)) {
       const prior = privateJson(requestFile);
       if (prior.fingerprint !== fingerprint) fail('REQUEST_CONFLICT', 'Request ID was already used with different content');
       return { ...prior.response, replayed: true };
-    }
   }
   const environment = (dependencies.environment ?? defaultEnvironment)(request.backend, client);
-  const frozen = resolve(client, request, environment);
+  const frozen = isRun ? prepared.config : resolve(client, request, environment);
+  if (isRun) validate(request.backend, frozen.requested_config, environment.catalog);
   if (request.operation === 'resolve') return frozen;
   const lock = path.join(client.clientDir, 'probe.lock');
   let lockFd;
@@ -274,10 +305,10 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
     const onSpawn = () => save(path.join(client.clientDir, `recent-${request.backend}.json`), { config: frozen.requested_config, usedAt: new Date().toISOString() });
     let response;
     try {
-      const result = await (dependencies.execute ?? executeServiceProbe)(client, request, frozen, environment, { onSpawn });
+      const result = await (dependencies.execute ?? executeServiceProbe)(client, isRun ? { ...request, prompt: prepared.prompt } : request, frozen, environment, { onSpawn });
       response = { ...result, request_id: request.request_id, config: frozen };
     } catch (error) {
-      response = { status: 'failed', request_id: request.request_id, config: frozen, error_code: error.code ?? 'PROBE_FAILED', message: error.message };
+      response = { status: 'failed', request_id: request.request_id, config: frozen, error_code: error.code ?? 'PROBE_FAILED', message: error.message, ...error.execution };
     }
     save(requestFile, { fingerprint, response });
     return response;

@@ -353,12 +353,16 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
     let timedOut = false;
     let sessionId = null;
     let terminal = null;
+    let nativeModel = null;
+    const permissionDenials = [];
 
     function consumeLine(line) {
       if (!line.trim()) return;
       let event;
       try { event = JSON.parse(line); } catch { return; }
       if (typeof event?.session_id === "string" && event.session_id) sessionId = event.session_id;
+      if (event?.type === "system" && event.subtype === "init" && typeof event.model === "string") nativeModel = event.model;
+      if (event?.type === "system" && event.subtype === "permission_denied" && permissionDenials.length < 100) permissionDenials.push({ tool: event.tool_name, reason: event.decision_reason_type ?? "permission" });
       if (event?.type === "result") terminal = event;
     }
 
@@ -379,7 +383,7 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
       settled = true;
       clearTimeout(deadline);
       releaseSignals();
-      resolve(result);
+      resolve(localchatPolicy ? { ...result, nativeModel, permissionDenials } : result);
     }
     const deadline = setTimeout(() => {
       timedOut = true;

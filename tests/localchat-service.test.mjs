@@ -39,7 +39,7 @@ test('registration is private, scoped and never overwrites a client', t => {
 test('capabilities show both backends and disabled native defaults without starting a task', async t => {
   const f = fixture(t);
   const result = await handleLocalchatRequest(f.scope, { ...f.request, operation: 'capabilities' }, dependencies);
-  assert.equal(result.task_dispatch_available, false);
+  assert.equal(result.task_dispatch_available, true);
   assert.equal(result.backends.length, 2);
   for (const backend of result.backends) {
     assert.equal(backend.profiles.find(x => x.id === 'default').enabled, false);
@@ -146,4 +146,36 @@ test('readonly policies omit the legacy sandbox override and disable unrelated t
   assert.match(text,/hooks = false/);
   assert.equal(claudeReadonlySettings('/test/authorized').sandbox.filesystem.allowRead[0],'/test/authorized');
   assert.deepEqual(claudeReadonlySettings('/test/authorized').sandbox.filesystem.allowWrite,[]);
+});
+
+
+test('prepared tasks freeze configurations and prompt bytes across later preset changes', async t => {
+  const f=fixture(t);
+  const request={...f.request,operation:'prepare',request_id:'task-one',prompt:'完整的上下文\n第二行'};
+  const prepared=await handleLocalchatRequest(f.scope,request,dependencies);
+  assert.equal(prepared.config.requested_config.effort,'medium');
+  assert.equal(fs.existsSync(path.join(f.clientDir,'recent-codex.json')),false);
+  const changed=backend=>{const e=environment(backend);e.defaultConfig.model='replacement';e.catalog.models.push('replacement');return e;};
+  let count=0;
+  const run={schema:1,client_id:f.request.client_id,token:f.request.token,operation:'run',backend:'codex',request_id:'task-one'};
+  const result=await handleLocalchatRequest(f.scope,run,{environment:changed,execute:async(_client,request,config)=>{
+    count++;assert.equal(config.requested_config.model,'codex-example');assert.equal(request.prompt,'完整的上下文\n第二行');return {status:'completed',raw_output:'完成'};
+  }});
+  assert.equal(result.status,'completed');
+  assert.equal((await handleLocalchatRequest(f.scope,run,{environment:()=>{throw Error('gone')}})).replayed,true);
+  assert.equal(count,1);
+  await assert.rejects(handleLocalchatRequest(f.scope,{...request,prompt:'different'},dependencies),{code:'REQUEST_CONFLICT'});
+  await assert.rejects(handleLocalchatRequest(f.scope,{...run,overrides:{model:'replacement'}},dependencies),{code:'INVALID_REQUEST'});
+  await assert.rejects(handleLocalchatRequest(f.scope,{...run,backend:'claude'},dependencies),{code:'INVALID_BACKEND'});
+});
+test('invalidated frozen model fails without fallback or launching a CLI', async t=>{
+  const f=fixture(t);await handleLocalchatRequest(f.scope,{...f.request,operation:'prepare',request_id:'stale',prompt:'task'},dependencies);
+  const absent=backend=>{const e=environment(backend);e.catalog.models=['new-model'];return e;};
+  await assert.rejects(handleLocalchatRequest(f.scope,{schema:1,client_id:f.request.client_id,token:f.request.token,operation:'run',backend:'codex',request_id:'stale'},{environment:absent,execute:()=>assert.fail('must not start')}),{code:'INVALID_CONFIG'});
+});
+
+test('large escaped results remain replayable from private storage',async t=>{
+  const f=fixture(t),request={...f.request,operation:'probe',request_id:'large',prompt:'sample'},output='"'.repeat(600000);
+  await handleLocalchatRequest(f.scope,request,{environment,execute:async()=>({status:'completed',raw_output:output})});
+  assert.equal((await handleLocalchatRequest(f.scope,request,dependencies)).raw_output,output);
 });

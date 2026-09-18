@@ -39,6 +39,7 @@ process.stdin.on("end", () => {
   process.stdout.write(JSON.stringify({
     type: "system",
     subtype: "init",
+    model: "claude-native-fixture",
     session_id: "${FAKE_SESSION_ID}",
   }) + "\\n");
   if (
@@ -101,6 +102,8 @@ test("localchat uses scope activation while limiting the native Claude tools to 
     });
     assert.equal(result.status,0,result.stderr);
     assert.equal(JSON.parse(result.stdout).cliStarted,true);
+    assert.equal(JSON.parse(result.stdout).nativeModel,"claude-native-fixture");
+    assert.deepEqual(JSON.parse(result.stdout).permissionDenials,[]);
     const call=JSON.parse(fs.readFileSync(callFile,'utf8')),value=flag=>call.argv[call.argv.indexOf(flag)+1];
     assert.equal(value('--add-dir'),canonical);
     assert.equal(value('--tools'),'Read');

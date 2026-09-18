@@ -68,3 +68,23 @@ outside source Git. No new hook, shell PATH block, daemon, or release is install
 
 Verification: `npm test` and `bash tests/integration.sh`. Localchat owns the
 source hash pin, optional MCP discovery/resolve tools, and live acceptance report.
+
+
+## M1 prepared asynchronous execution
+
+Localchat now exposes persistent tasks through a detached queue worker. The
+service adds `prepare` and `run`; neither is a general command interface.
+`prepare` accepts an explicit configuration, stable `request_id` and a visible
+context prompt of at most 64000 UTF-8 bytes, then stores the frozen tuple and
+prompt privately. Identical preparation replays the same snapshot; conflicting
+content is rejected. `run` accepts only backend and prepared request identity,
+revalidates the frozen model/permissions against the current CLI catalog, and
+never resolves a changed preset again. A removed model fails without fallback.
+
+The existing bounded runner, native login, read-only policy and single-client
+execution lock remain in force. A durable execution claim prevents duplicate
+inference. Visible results are limited to 1 MiB. The service forwards a concrete
+Claude model ID and permission-denial summaries when reported by the native
+CLI; unknown fields stay null/empty. The Localchat worker owns persistence and
+queueing, independently of HTTP/stdio request lifetime. M2 will add continuation,
+cancellation and recovery of uncertain claims; M1 never restarts such claims.
