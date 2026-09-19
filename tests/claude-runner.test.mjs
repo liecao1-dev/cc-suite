@@ -71,6 +71,8 @@ process.stdin.on("end", () => {
     is_error: false,
     session_id: "${FAKE_SESSION_ID}",
     result: process.env.FAKE_CLAUDE_RESULT ?? "Claude answer",
+    usage: { input_tokens: 12, output_tokens: 8, cache_read_input_tokens: 0, cache_creation_input_tokens: 4 },
+    total_cost_usd: 0.005,
   }) + "\\n");
 });
 `);
@@ -104,6 +106,8 @@ test("localchat uses scope activation while limiting the native Claude tools to 
     assert.equal(JSON.parse(result.stdout).cliStarted,true);
     assert.equal(JSON.parse(result.stdout).nativeModel,"claude-native-fixture");
     assert.deepEqual(JSON.parse(result.stdout).permissionDenials,[]);
+    assert.equal(JSON.parse(result.stdout).usage.input_tokens,12);
+    assert.equal(JSON.parse(result.stdout).usage.reported_cost_usd,0.005);
     const call=JSON.parse(fs.readFileSync(callFile,'utf8')),value=flag=>call.argv[call.argv.indexOf(flag)+1];
     assert.equal(value('--add-dir'),canonical);
     assert.equal(value('--tools'),'Read');

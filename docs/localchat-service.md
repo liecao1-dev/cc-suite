@@ -111,3 +111,13 @@ Localchat 先建立私有 `workspaces/<32位根任务ID>/files`，执行服务�
 Codex 使用每份副本独立且续接稳定的配置目录，保留现有登录引用；仅副本有写权限，仍禁用网络及无关工具。不能传旧 `--sandbox` 覆盖自定义权限配置。Claude 使用 `Read,Edit,Write`，仅副本的 `Read`/`Edit` 路径规则被允许，`Edit(path)` 同时约束 Write；Bash、再次派发与外部 MCP 仍关闭。Claude 的内置文件工具直接经过权限系统，而不是 Bash 沙盒。参考 [Codex 权限](https://learn.chatgpt.com/docs/permissions)、[Claude 文件权限规则](https://code.claude.com/docs/en/permissions#read-and-edit) 和 [Claude 沙盒范围](https://code.claude.com/docs/en/sandboxing#scope)。
 
 此服务只返回原生执行结果及停止凭据；原文件写回由 Localchat 独立负责，不交给 runner。Localchat 检查实际文件、冻结变更清单、核对原文件版本并保存历史；`completed` 的原生执行结果不等于原文件已保存。M3 真实双端编辑与原文件写回证据由 Localchat 的 M3 验收记录维护。
+
+## M4：实际用量与跨端交接
+
+`capabilities.stage` 为 `M4`，增加 `observability` 说明。localchat 路线从 Codex `turn.completed.usage`、Claude 终态 `result.usage` 与 `total_cost_usd` 提取数值白名单，保存到任务结果和恢复凭据。普通 composer/CLI 输出结构不增加该字段。
+
+`usage` 包括可取得的输入、输出、缓存读取、缓存写入和推理输出计数，以及 Claude CLI 报告的费用。未知值为 `null`，实际的 0 原样保留；`status` 为 `reported` 或 `unavailable`，`source` 说明事件来源。`scope: native-cli-report`、`aggregation: none`、`billing_verified: false` 表示没有跨任务累加或账单核对。旧结果没有该字段时仍可读取；不从原始日志回填，不暴露事件正文、响应头或凭据。
+
+跨端交接由 Localchat 的 `handoff_task` 记录来源、结果和文件版本，再使用既有 `prepare`/`run` 新建另一端任务；不会跨后端传递 `parent_request_id` 或原生 session ID。任务来源只是引用材料，不授权递归派发。文件副本与原文件写回边界不变。
+
+M4 完整检查为 386 项单元测试、480 项集成检查通过；Localchat 另有 127 项检查及 Claude 分析 → Codex 修改/写回 → Claude 换配置复核的 3 次真实调用。这里没有发布新的 cc-suite 版本，composer、hook 与 activation 指向不变。

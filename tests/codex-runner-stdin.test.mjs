@@ -39,6 +39,7 @@ if (args.length === 1 && args[0] === "--version") {
     fs.writeFileSync(args[outputIndex + 1], "finished\\n");
     fs.writeFileSync(process.env.CAPTURE_PROMPT, prompt);
     process.stdout.write(JSON.stringify({type:"thread.started",thread_id:"12345678-1234-1234-1234-123456789abc"}) + "\\n");
+    process.stdout.write(JSON.stringify({type:"turn.completed",usage:{input_tokens:120,cached_input_tokens:100,output_tokens:8,reasoning_output_tokens:0}}) + "\\n");
   });
 }
 
@@ -95,6 +96,7 @@ test("codex runner reads an arbitrary prompt from stdin without shell interpreta
     assert.equal(output.status, "completed");
     assert.equal(output.threadId, "12345678-1234-1234-1234-123456789abc");
     assert.equal(output.rawOutput, "finished\n");
+    assert.equal(output.usage, undefined, 'Ordinary composer result shape remains unchanged');
     const captured = fs.readFileSync(capture, "utf8");
     assert.match(captured, /^This request already reached you by delegation from Claude Code\./);
     assert.ok(captured.endsWith(prompt));
@@ -191,6 +193,10 @@ test('Localchat Codex resume requires the matching service policy session and ke
       } finally { fs.closeSync(fd); }
       if (!allowed) { assert.notEqual(result.status, 0); assert.equal(fs.existsSync(path.join(scope,'argv.json')), false); continue; }
       assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).usage.source, 'codex.turn.completed');
+      assert.equal(JSON.parse(result.stdout).usage.input_tokens, 120);
+      assert.equal(JSON.parse(result.stdout).usage.cached_input_tokens, 100);
+      assert.equal(JSON.parse(result.stdout).usage.reported_cost_usd, null);
       const argv = JSON.parse(fs.readFileSync(path.join(scope, 'argv.json')));
       assert.deepEqual(argv.slice(0,4), ['--strict-config','exec','resume',session]); assert(!argv.includes('--sandbox'));
       assert(argv.includes('approval_policy="never"'));

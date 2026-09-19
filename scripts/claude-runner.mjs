@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { backendPhase, writeReceipt, stopBackend } from './lib/localchat-receipts.mjs';
+import { localchatUsage } from './lib/localchat-usage.mjs';
 // Run or resume one Claude Code task with a hard deadline and project-local state.
 
 import fs from "node:fs";
@@ -391,7 +392,7 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
       settled = true;
       clearTimeout(deadline);
       releaseSignals();
-      resolve(localchatPolicy ? { ...result, nativeModel, permissionDenials } : result);
+      resolve(localchatPolicy ? { ...result, nativeModel, permissionDenials, usage: localchatUsage('claude', terminal) } : result);
     }
     const deadline = setTimeout(() => {
       timedOut = true;

@@ -245,7 +245,7 @@ export function executeServiceProbe(client, request, frozen, environment, { onSp
 }
 
 function normalizeResult(result, exitCode = result.status === 'completed' ? 0 : 1) {
-  const info = { backend_session_id: result.threadId ?? null, job_id: result.jobId ?? null, reported_model: result.nativeModel ?? null, permission_denials: result.permissionDenials ?? [] };
+  const info = { backend_session_id: result.threadId ?? null, job_id: result.jobId ?? null, reported_model: result.nativeModel ?? null, permission_denials: result.permissionDenials ?? [], usage: result.usage ?? null };
   const message = result.error ?? result.errorMessage ?? 'Execution did not complete';
   if (exitCode !== 0 || result.status !== 'completed' || typeof result.rawOutput !== 'string' || !result.rawOutput.trim()) {
     const error_code = result.status === 'stalled' || /timed out/i.test(message) ? 'EXECUTION_TIMEOUT'
@@ -395,7 +395,8 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
           supported_access: backend === 'codex' ? ['read-only'] : ['plan','dontAsk'], edit_supported_access: backend === 'codex' ? ['workspace-write'] : ['dontAsk'], ...(backend === 'codex' ? { supported_approvals: ['never'] } : {}) });
       } catch (e) { backends.push({ backend, status: 'unavailable', error_code: e.code ?? 'CATALOG_UNAVAILABLE', message: e.message }); }
     }
-    return { schema: 1, stage: 'M3', workspace_id: client.workspaceId, backends, task_dispatch_available: true, execution_deadline_seconds: 180,
+    return { schema: 1, stage: 'M4', workspace_id: client.workspaceId, backends, task_dispatch_available: true, execution_deadline_seconds: 180,
+      observability: { usage: 'native-cli-when-reported', billing_verified: false, cross_task_aggregation: false },
       task_modes: ['read-only','edit'], editing: { scope: 'private-task-copy-only', original_writeback: 'separate-localchat-apply', deletion_supported: false },
       continuation: { codex: 'native-resume', claude: 'saved-conversation-replay', running_supplements: 'next-turn-queue', changed_config: 'new-session-with-context-handoff' },
       interaction: { live_interrupt: false, live_approval: false, structured_clarification: false, permission_denials: 'when-reported-by-cli', response: 'explicit-follow-up-turn' } };

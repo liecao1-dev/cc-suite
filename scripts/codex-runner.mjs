@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { backendPhase, writeReceipt, stopBackend } from './lib/localchat-receipts.mjs';
+import { localchatUsage } from './lib/localchat-usage.mjs';
 // codex-runner.mjs — Run Codex tasks in foreground or background with job tracking.
 //
 // Usage:
@@ -260,6 +261,7 @@ function executeCodex(cwd, args, logFile) {
     let errorEvent = null; // highest-ranked error seen on the JSONL stream
     let settled = false;
     let timedOut = false;
+    let usage = localchatUsage('codex', null);
 
     // stdin is a private pipe containing the already-complete prompt.  Ending
     // it immediately preserves the old non-TTY/no-controlling-terminal
@@ -304,7 +306,7 @@ function executeCodex(cwd, args, logFile) {
       if (killTimer) clearTimeout(killTimer);
       releaseSignals();
       try { fs.unlinkSync(lastMessageFile); } catch { /* ignore */ }
-      resolve(result);
+      resolve(localchatPolicy ? { ...result, usage } : result);
     }
 
 
@@ -364,6 +366,9 @@ function executeCodex(cwd, args, logFile) {
 
     function processLine(line) {
       if (!line.trim()) return;
+      if (localchatPolicy) {
+        try { const event = JSON.parse(line); if (event.type === 'turn.completed') usage = localchatUsage('codex', event); } catch {}
+      }
       fs.appendFileSync(logFile, line + "\n", "utf8");
       if (!threadId) {
         const found = extractThreadId(line);
@@ -482,7 +487,7 @@ async function runForeground(stateRoot, executionCwd, args) {
 
   const output = {
     jobId,
-    ...(localchatPolicy ? { cliStarted } : {}),
+    ...(localchatPolicy ? { cliStarted, usage: result.usage } : {}),
     status: result.status,
     threadId: result.threadId || null,
     rawOutput: result.rawOutput || "",
