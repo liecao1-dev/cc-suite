@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { backendPhase, writeReceipt, stopBackend } from './lib/localchat-receipts.mjs';
+import { createCheckpoint } from './lib/localchat-budget.mjs';
+import { backendPhase, writeReceipt, stopBackend, interruptBackend } from './lib/localchat-receipts.mjs';
 import { localchatUsage } from './lib/localchat-usage.mjs';
 // codex-runner.mjs — Run Codex tasks in foreground or background with job tracking.
 //
@@ -269,6 +270,9 @@ function executeCodex(cwd, args, logFile) {
     // detached:true makes the child a process-group leader (POSIX), so the
     // deadline can terminate the whole group — codex tool subprocesses
     // included — instead of only the direct child.
+    const checkpoint = localchatPolicy?.receiptBase ? createCheckpoint({ base: localchatPolicy.receiptBase,
+      backend: localchatPolicy.target, timeoutMs: args.timeoutMs,
+      interrupt: () => interruptBackend(localchatPolicy.receiptBase) }) : null;
     backendPhase(localchatPolicy, 'spawning');
     const child = spawn(args.codexBinary, codexArgs, {
       cwd,
@@ -277,7 +281,7 @@ function executeCodex(cwd, args, logFile) {
       detached: true,
     });
     child.once("spawn", () => {
-      backendPhase(localchatPolicy, 'running', child.pid);
+      backendPhase(localchatPolicy, 'running', child.pid); checkpoint?.start();
       cliStarted = true;
       if (!args.recordRecent) return;
       try {
@@ -301,6 +305,8 @@ function executeCodex(cwd, args, logFile) {
     function finish(result) {
       if (settled) return;
       settled = true;
+      const partial = checkpoint?.finish(result.rawOutput ?? '', timedOut);
+      if (partial) result = { ...result, ...partial };
       clearInterval(heartbeat);
       clearTimeout(deadline);
       if (killTimer) clearTimeout(killTimer);
@@ -350,7 +356,8 @@ function executeCodex(cwd, args, logFile) {
       HEARTBEAT_MS
     );
 
-    const deadline = setTimeout(
+    let deadline;
+    child.once("spawn", () => { deadline = setTimeout(
       guarded(() => {
         timedOut = true;
         appendLog(logFile, `Deadline exceeded (${Math.round(args.timeoutMs / 1000)}s) — terminating`);
@@ -361,13 +368,13 @@ function executeCodex(cwd, args, logFile) {
         }, SIGKILL_GRACE_MS);
         killTimer.unref?.();
       }),
-      args.timeoutMs
-    );
+      checkpoint?.remainingMs() ?? args.timeoutMs
+    ); });
 
     function processLine(line) {
       if (!line.trim()) return;
       if (localchatPolicy) {
-        try { const event = JSON.parse(line); if (event.type === 'turn.completed') usage = localchatUsage('codex', event); } catch {}
+        try { const event = JSON.parse(line); checkpoint?.consume(event); if (event.type === 'turn.completed') usage = localchatUsage('codex', event); } catch {}
       }
       fs.appendFileSync(logFile, line + "\n", "utf8");
       if (!threadId) {
@@ -487,7 +494,7 @@ async function runForeground(stateRoot, executionCwd, args) {
 
   const output = {
     jobId,
-    ...(localchatPolicy ? { cliStarted, usage: result.usage } : {}),
+    ...(localchatPolicy ? { cliStarted, usage: result.usage, ...(result.checkpoint ? { checkpoint: result.checkpoint } : {}) } : {}),
     status: result.status,
     threadId: result.threadId || null,
     rawOutput: result.rawOutput || "",

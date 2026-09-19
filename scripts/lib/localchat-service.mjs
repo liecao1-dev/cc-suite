@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { EXECUTION_MS, SAVE_MS, STARTUP_MS, savedPartial } from './localchat-budget.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomBytes, timingSafeEqual, randomUUID } from 'node:crypto';
@@ -214,7 +215,7 @@ export function executeServiceProbe(client, request, frozen, environment, { onSp
   const config = frozen.requested_config;
   const args = [path.join(SOURCE_ROOT, `scripts/${request.backend}-runner.mjs`), '--kind', `${request.backend}-localchat-m0`, '--model', config.model, '--effort', config.effort,
     ...(request.backend === 'codex' ? ['--sandbox', config.access, '--approval', config.approval] : ['--permission-mode', config.access]),
-    ...(request.resume_session ? ['--resume', request.resume_session] : []), '--timeout-ms', '180000', '--prompt-stdin'];
+    ...(request.resume_session ? ['--resume', request.resume_session] : []), '--timeout-ms', String(EXECUTION_MS), '--prompt-stdin'];
   return new Promise((resolveResult, reject) => {
     writeReceipt(receiptBase, 'runner', { phase: 'spawning' });
     const child = spawn(process.execPath, args, { cwd: workspace, env, stdio: ['pipe','pipe','pipe','pipe'], detached: true });
@@ -222,10 +223,15 @@ export function executeServiceProbe(client, request, frozen, environment, { onSp
     let stdout = '', stderr = '', timedOut = false, overflow = false;
     const kill = () => stopExecution(receiptBase);
     const cancelTimer = setInterval(() => { if (cancelled()) kill(); }, 500);
-    const timer = setTimeout(() => { timedOut = true; kill(); }, 195000);
+    const launchedAt = Date.now();
+    const timer = setInterval(() => {
+      const checkpoint = readReceipt(receiptBase, 'checkpoint');
+      const deadline = checkpoint?.deadline_at ? Date.parse(checkpoint.deadline_at) + 15_000 : launchedAt + STARTUP_MS;
+      if (Date.now() >= deadline) { timedOut = true; kill(); }
+    }, 500);
     const stop = () => kill();
     process.once('SIGTERM', stop); process.once('SIGINT', stop);
-    const cleanup = () => { clearTimeout(timer); clearInterval(cancelTimer); process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', stop); };
+    const cleanup = () => { clearInterval(timer); clearInterval(cancelTimer); process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', stop); };
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     child.stdin.on('error', () => {}); child.stdio[3].on('error', () => {});
     child.stdio[3].end(JSON.stringify(policy)); child.stdin.end(request.prompt);
@@ -246,6 +252,7 @@ export function executeServiceProbe(client, request, frozen, environment, { onSp
 
 function normalizeResult(result, exitCode = result.status === 'completed' ? 0 : 1) {
   const info = { backend_session_id: result.threadId ?? null, job_id: result.jobId ?? null, reported_model: result.nativeModel ?? null, permission_denials: result.permissionDenials ?? [], usage: result.usage ?? null };
+  if (result.status === 'partial' && result.checkpoint?.partial === true && typeof result.rawOutput === 'string' && Buffer.byteLength(result.rawOutput) <= 1024 * 1024) return { status: 'partial', raw_output: result.rawOutput, checkpoint: result.checkpoint, ...info };
   const message = result.error ?? result.errorMessage ?? 'Execution did not complete';
   if (exitCode !== 0 || result.status !== 'completed' || typeof result.rawOutput !== 'string' || !result.rawOutput.trim()) {
     const error_code = result.status === 'stalled' || /timed out/i.test(message) ? 'EXECUTION_TIMEOUT'
@@ -286,8 +293,8 @@ function executionContext(client, prepared) {
   const continuation = continuationFor(prepared, parent);
   if (!parent) return { prompt: prepared.prompt, continuation };
   const prior = privateJson(path.join(client.clientDir, `execution-${prepared.parent_request_id}.json`)).response;
-  if (!['completed','failed','canceled','timed_out'].includes(prior.status)) fail('PARENT_UNFINISHED', 'Previous execution has no confirmed terminal result');
-  if (continuation.mode === 'codex-native-resume' && prior.status === 'completed') {
+  if (!['completed','partial','failed','canceled','timed_out'].includes(prior.status)) fail('PARENT_UNFINISHED', 'Previous execution has no confirmed terminal result');
+  if (continuation.mode === 'codex-native-resume' && ['completed','partial'].includes(prior.status) && (prior.status !== 'partial' || /^[a-f0-9-]{16,64}$/i.test(prior.backend_session_id ?? ''))) {
     if (!/^[a-f0-9-]{16,64}$/i.test(prior.backend_session_id ?? '')) fail('CONTINUITY_UNAVAILABLE', 'Previous Codex session identity is unavailable; no replacement session was started');
     return { prompt: prepared.prompt, resume_session: prior.backend_session_id, continuation: { ...continuation, retained_turns: null, truncated: false } };
   }
@@ -333,9 +340,10 @@ function inspectExecution(client, request, { stop = false } = {}) {
   if (record.response.status !== 'indeterminate') return { ...record.response, recovered: true };
   const ownerState = identityState(record.owner);
   const final = readReceipt(base, 'result');
+  const checkpoint = readReceipt(base, 'checkpoint');
   // A durable native result survives recovery performed after the wall-clock
   // deadline. The native runner itself marks deadline failures as stalled.
-  const timedOut = !final && Date.now() >= record.deadline_at;
+  const timedOut = !final && Date.now() >= (checkpoint?.deadline_at ? Date.parse(checkpoint.deadline_at) + 15_000 : record.deadline_at);
   if ((stop || timedOut) && record.owner) {
     stopExecution(base);
     // A live service supervises its own close handler. Recovery never kills an
@@ -346,11 +354,13 @@ function inspectExecution(client, request, { stop = false } = {}) {
   let response;
   const confirmed = after.runnerState === 'gone' && after.backendState === 'gone' && after.descendantsGone;
   if (canceled) response = { status: confirmed ? 'canceled' : 'stopping', termination_confirmed: confirmed };
+  else if (confirmed && checkpoint?.partial && (!final || timedOut)) response = { ...savedPartial(checkpoint), termination_confirmed: true };
   else if (timedOut) response = { status: confirmed ? 'timed_out' : 'indeterminate', termination_confirmed: confirmed, error_code: 'EXECUTION_TIMEOUT' };
-  else if (final) response = { ...normalizeResult(final), termination_confirmed: true };
+  else if (final && confirmed) response = { ...normalizeResult(final), termination_confirmed: true };
   else if (ownerState === 'alive' || after.runnerState === 'alive' || after.backendState === 'alive') response = { status: 'running', termination_confirmed: false };
   else response = { status: confirmed ? 'failed' : 'indeterminate', error_code: 'EXECUTION_INTERRUPTED', termination_confirmed: confirmed,
     message: confirmed ? 'Execution exited without a durable result; it was not rerun' : 'Process identity or spawn outcome is unknown; it was not rerun' };
+  if (checkpoint) response.checkpoint = checkpoint;
   response = { ...response, config: prepared.config, request_id: request.request_id, continuation: record.continuation, recovered: true };
   // Do not race the live owner's final write; the cancel marker remains the
   // shared source of truth until that owner finishes.
@@ -395,7 +405,7 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
           supported_access: backend === 'codex' ? ['read-only'] : ['plan','dontAsk'], edit_supported_access: backend === 'codex' ? ['workspace-write'] : ['dontAsk'], ...(backend === 'codex' ? { supported_approvals: ['never'] } : {}) });
       } catch (e) { backends.push({ backend, status: 'unavailable', error_code: e.code ?? 'CATALOG_UNAVAILABLE', message: e.message }); }
     }
-    return { schema: 1, stage: 'M4', workspace_id: client.workspaceId, backends, task_dispatch_available: true, execution_deadline_seconds: 180,
+    return { schema: 1, stage: 'M4', workspace_id: client.workspaceId, backends, task_dispatch_available: true, execution_deadline_seconds: EXECUTION_MS / 1000, save_after_seconds: SAVE_MS / 1000, deadline_starts_at: 'native-process-start',
       observability: { usage: 'native-cli-when-reported', billing_verified: false, cross_task_aggregation: false },
       task_modes: ['read-only','edit'], editing: { scope: 'private-task-copy-only', original_writeback: 'separate-localchat-apply', deletion_supported: false },
       continuation: { codex: 'native-resume', claude: 'saved-conversation-replay', running_supplements: 'next-turn-queue', changed_config: 'new-session-with-context-handoff' },
@@ -475,7 +485,7 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
   const context = isRun ? executionContext(client, prepared) : { prompt: request.prompt, continuation: { mode: 'fresh' } };
   const lock = acquireClientLock(client, request);
   const pending = { status: 'indeterminate', request_id: request.request_id, config: frozen };
-  const record = { fingerprint, response: pending, owner: processIdentity(), deadline_at: Date.now() + 195000, continuation: context.continuation };
+  const record = { fingerprint, response: pending, owner: processIdentity(), deadline_at: Date.now() + STARTUP_MS, continuation: context.continuation };
   const receiptBase = receiptBaseFor(client, request.request_id);
   try {
     // Claim durably before executing. An uncertain claim is never replayed as a second model call.
@@ -503,6 +513,10 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
         if (!confirmed) response.status = 'indeterminate';
       }
       if ((observed.backendState === 'unknown' || observed.runnerState === 'unknown') && !readReceipt(receiptBase, 'result')) response.status = 'indeterminate';
+    }
+    if (['failed','timed_out'].includes(response.status) && response.termination_confirmed === true) {
+      const saved = savedPartial(readReceipt(receiptBase, 'checkpoint'));
+      if (saved) response = { ...response, ...saved, error_code: undefined, message: undefined };
     }
     save(requestFile, { ...record, response });
     return response;

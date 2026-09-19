@@ -6,7 +6,7 @@ import { withDelegationBoundary, withClaudeDelegationBoundary } from './delegati
 export function localchatPrompt(target, prompt) {
   const wrapped = target === 'codex' ? withDelegationBoundary(prompt) : withClaudeDelegationBoundary(prompt);
   return wrapped.replace(/^This request already reached you by delegation from (Claude Code|OpenAI Codex)\./,
-    'This request already reached you by delegation from Chat through localchat.');
+    'This request already reached you by delegation from Chat through localchat.\n\nTime budget: execution is limited to 60 minutes. At 55 minutes the host saves visible output and interrupts this turn for handback. Save authorized file changes incrementally in the private working copy and emit concise visible progress describing completed work and remaining steps. Do not rely on a final message or work held only in memory. A time-limited result is partial, never full completion.');
 }
 
 export function readLocalchatPolicy(env = process.env) {

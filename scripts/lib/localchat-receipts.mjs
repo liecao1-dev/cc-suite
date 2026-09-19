@@ -83,6 +83,13 @@ export function stopExecution(base) {
   const after = executionProcesses(base);
   return after.runnerState === 'gone' && after.backendState === 'gone' && after.descendantsGone;
 }
+export function interruptBackend(base) {
+  if (!base) return false;
+  const { backend, backendState } = executionProcesses(base);
+  if (backendState !== 'alive') return false;
+  writeReceipt(base, 'descendants', [...(readReceipt(base, 'descendants') ?? []), ...groupMembers(backend.pid)]);
+  try { terminateProcessTree(backend.pid, { signal: 'SIGINT' }); return true; } catch { return false; }
+}
 export function stopBackend(base) {
   if (!base) return false;
   const { backend, backendState } = executionProcesses(base);

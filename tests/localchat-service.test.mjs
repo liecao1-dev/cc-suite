@@ -333,3 +333,35 @@ test('M2 stopping kills detached CLI descendants and refuses unverified PID iden
   writeReceipt(base, 'backend', { phase: 'running', pid: process.pid, pidStartedAt: null });
   assert.equal(stopExecution(base), false); assert.equal(identityState(processIdentity()), 'alive');
 });
+
+for (const backend of ['codex','claude']) test(`${backend} partial result resumes with saved context instead of losing the completed work`, async t => {
+  const f = fixture(t); f.request.backend = backend;
+  const first = 'partial-first', second = 'partial-next';
+  await handleLocalchatRequest(f.scope, operation(f,'prepare',first,{backend,prompt:'Original goal',selection:'analysis'}),dependencies);
+  await handleLocalchatRequest(f.scope, operation(f,'run',first,{backend}), { environment, execute: async()=>({status:'partial',raw_output:'First section saved; second remains.',backend_session_id:nativeSession,termination_confirmed:true}) });
+  await handleLocalchatRequest(f.scope, operation(f,'prepare',second,{backend,parent_request_id:first,prompt:'Continue remaining work'}),dependencies);
+  const result = await handleLocalchatRequest(f.scope, operation(f,'run',second,{backend}), {environment,execute:async(_c,r)=>{
+    if(backend==='codex') assert.equal(r.resume_session,nativeSession);
+    else assert.match(r.prompt,/First section saved; second remains/);
+    return {status:'completed',raw_output:'Finished.'};
+  }});
+  assert.equal(result.status,'completed');
+  const cap = await handleLocalchatRequest(f.scope,{...f.request,operation:'capabilities'},dependencies);
+  assert.equal(cap.execution_deadline_seconds,3600); assert.equal(cap.save_after_seconds,3300);
+});
+
+test('lost runner result recovers the saved partial checkpoint without inference, and cancellation still wins', async t => {
+ const f=fixture(t), id='saved-partial';
+ await handleLocalchatRequest(f.scope,operation(f,'prepare',id,{selection:'analysis',prompt:'Goal'}),dependencies);
+ const file=path.join(f.clientDir,`execution-${id}.json`),base=path.join(f.clientDir,`receipt-${id}`);
+ const record={owner:{pid:2147483647,pidStartedAt:'gone'},deadline_at:Date.now()-1,response:{status:'indeterminate'}};
+ fs.writeFileSync(file,JSON.stringify(record),{mode:0o600});
+ writeReceipt(base,'backend',{phase:'closed'}); writeReceipt(base,'runner',{phase:'closed'});
+ writeReceipt(base,'checkpoint',{partial:true,phase:'wrapping_up',raw_output:'Saved before crash',backend_session_id:nativeSession});
+ const result=await handleLocalchatRequest(f.scope,operation(f,'inspect',id),{execute:()=>assert.fail('No inference during recovery')});
+ assert.equal(result.status,'partial'); assert.equal(result.raw_output,'Saved before crash'); assert.equal(result.termination_confirmed,true);
+ fs.writeFileSync(file,JSON.stringify(record),{mode:0o600});
+ fs.writeFileSync(path.join(f.clientDir,`cancel-${id}.json`),'{}',{mode:0o600});
+ const canceled=await handleLocalchatRequest(f.scope,operation(f,'inspect',id),dependencies);
+ assert.equal(canceled.status,'canceled'); assert.equal(canceled.raw_output,undefined);
+});

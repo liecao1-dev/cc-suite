@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { backendPhase, writeReceipt, stopBackend } from './lib/localchat-receipts.mjs';
+import { createCheckpoint } from './lib/localchat-budget.mjs';
+import { backendPhase, writeReceipt, stopBackend, interruptBackend } from './lib/localchat-receipts.mjs';
 import { localchatUsage } from './lib/localchat-usage.mjs';
 // Run or resume one Claude Code task with a hard deadline and project-local state.
 
@@ -330,6 +331,7 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
     const settings = buildClaudeSettings(access, args.permissionMode, args.toolPolicy, documentTools);
     const mcpServers = !localchatPolicy && args.toolPolicy === "standard" ? loadKlodeMcpServers() : {};
     const argv = directClaudeArgs(args, access, settings, mcpServers);
+    if (localchatPolicy?.receiptBase) argv.push("--include-partial-messages");
     const prompt = localchatPolicy ? localchatPrompt('claude', args.prompt) : withClaudeDelegationBoundary(
       [documentTools.instructions, args.prompt].filter(Boolean).join("\n\n"),
     );
@@ -341,6 +343,9 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
     appendLog(logFile, `Access: read ${access.scopeRoot}; write ${localchatPolicy?.mode === "read-only" ? "none" : access.workspaceRoot}`);
     appendLog(logFile, `Klode MCP: ${mcpServers.klode ? "forwarded from user registration" : "not registered"}`);
     appendLog(logFile, `Deadline: ${Math.round(args.timeoutMs / 1000)}s`);
+    const checkpoint = localchatPolicy?.receiptBase ? createCheckpoint({ base: localchatPolicy.receiptBase,
+      backend: localchatPolicy.target, timeoutMs: args.timeoutMs,
+      interrupt: () => interruptBackend(localchatPolicy.receiptBase) }) : null;
     backendPhase(localchatPolicy, 'spawning');
     const child = spawn(claudeBinary, argv, {
       cwd: access.executionCwd,
@@ -348,7 +353,7 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
-    child.once("spawn", () => { backendPhase(localchatPolicy, 'running', child.pid); cliStarted = true; recordRecentAfterSpawn(cwd, args, logFile); });
+    child.once("spawn", () => { backendPhase(localchatPolicy, 'running', child.pid); checkpoint?.start(); cliStarted = true; recordRecentAfterSpawn(cwd, args, logFile); });
     const releaseSignals = installChildSignalForwarding(child);
     let stdoutBuffer = "";
     let stderr = "";
@@ -363,6 +368,7 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
       if (!line.trim()) return;
       let event;
       try { event = JSON.parse(line); } catch { return; }
+      checkpoint?.consume(event);
       if (typeof event?.session_id === "string" && event.session_id) sessionId = event.session_id;
       if (event?.type === "system" && event.subtype === "init" && typeof event.model === "string") nativeModel = event.model;
       if (event?.type === "system" && event.subtype === "permission_denied" && permissionDenials.length < 100) permissionDenials.push({ tool: event.tool_name, reason: event.decision_reason_type ?? "permission" });
@@ -390,11 +396,14 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
     function finish(result) {
       if (settled) return;
       settled = true;
+      const partial = checkpoint?.finish(result.rawOutput ?? '', timedOut);
+      if (partial) result = { ...result, ...partial };
       clearTimeout(deadline);
       releaseSignals();
       resolve(localchatPolicy ? { ...result, nativeModel, permissionDenials, usage: localchatUsage('claude', terminal) } : result);
     }
-    const deadline = setTimeout(() => {
+    let deadline;
+    child.once("spawn", () => { deadline = setTimeout(() => {
       timedOut = true;
       if (localchatPolicy?.receiptBase) { stopBackend(localchatPolicy.receiptBase); return; }
       try { terminateProcessTree(child.pid, { signal: "SIGTERM" }); } catch {}
@@ -403,7 +412,7 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
           try { terminateProcessTree(child.pid, { signal: "SIGKILL" }); } catch {}
         }
       }, 5_000).unref?.();
-    }, args.timeoutMs);
+    }, checkpoint?.remainingMs() ?? args.timeoutMs); });
     child.stdout.on("data", (chunk) => {
       const text = chunk.toString();
       stdoutBuffer += text;
@@ -458,7 +467,7 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
 
 async function executeClaudeDirect(cwd, args, logFile) {
   const first = await executeClaudeDirectAttempt(cwd, args, logFile, 1);
-  if (!first.retryableExpiredOAuth) {
+  if (!first.retryableExpiredOAuth || first.status === 'partial') {
     delete first.retryableExpiredOAuth;
     return first;
   }

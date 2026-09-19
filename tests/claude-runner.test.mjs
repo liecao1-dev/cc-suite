@@ -36,6 +36,13 @@ process.stdin.on("end", () => {
     calibreConfig: process.env.CALIBRE_CONFIG_DIRECTORY,
   };
   fs.writeFileSync(process.env.CAPTURE_CALL, JSON.stringify(capture));
+  if (process.env.FAKE_BUDGET) {
+    process.stdout.write(JSON.stringify({type:'assistant',session_id:'12345678-1234-1234-1234-123456789abc',message:{id:'one',content:[{type:'text',text:'Completed first section. Remaining: second section.'}]}}) + "\\n");
+    fs.writeFileSync('saved.txt','durable first section');
+    process.on('SIGINT',()=>{ if(process.env.FAKE_BUDGET !== 'ignore') process.exit(130); });
+    setInterval(()=>{},1000);
+    return;
+  }
   process.stdout.write(JSON.stringify({
     type: "system",
     subtype: "init",
@@ -523,4 +530,29 @@ test("CLI compatibility calls keep the same scoped read/write boundary", () => {
       },
     });
   } finally { cleanupDir(project); }
+});
+
+for (const behavior of ['interrupt','ignore']) test('Localchat claude persists progress across ' + behavior + ' at the save deadline', () => {
+  const scope=makeTempDir('claude-budget-');
+  try {
+    const workspace=path.join(scope,'workspace'),bin=path.join(scope,'bin'),home=path.join(scope,'home'),receipts=path.join(scope,'receipts');
+    for(const dir of [workspace,bin,home,receipts]) fs.mkdirSync(dir,{mode:0o700});
+    const canonical=fs.realpathSync(workspace),binary=path.join(bin,'claude');
+    writeFakeClaude(bin); writeActivation(scope,binary);
+    const receiptBase=path.join(fs.realpathSync(receipts),'receipt-test'), policy=path.join(scope,'policy.json');
+    fs.writeFileSync(policy,JSON.stringify({schema:1,target:'claude',mode:'read-only',workspace:canonical,codexHome:fs.realpathSync(home),receiptBase}));
+    const fd=fs.openSync(policy,'r'); let result;
+    try { result=spawnSync(process.execPath,[RUNNER,'--model','opus','--effort','high','--permission-mode','plan','--timeout-ms','2400','--prompt-stdin'],{
+      cwd:workspace,input:'Save incremental progress',encoding:'utf8',timeout:15000,stdio:['pipe','pipe','pipe',fd],
+      env:{...process.env,CODEX_HOME:home,CC_SUITE_SCOPE_ROOT:fs.realpathSync(scope),CC_SUITE_WORKSPACE_ROOT:canonical,CC_SUITE_LOCALCHAT_POLICY_FD:'3',FAKE_BUDGET:behavior,
+        CAPTURE_ARGV:path.join(scope,'argv.json'),CAPTURE_PROMPT:path.join(scope,'prompt.txt'),CAPTURE_CALL:path.join(scope,'call.json')}
+    }); } finally {fs.closeSync(fd);}
+    assert.equal(result.error,undefined); assert.equal(result.status,1,result.stderr);
+    const output=JSON.parse(result.stdout); assert.equal(output.status,'partial'); assert.match(output.rawOutput,/Completed first section/);
+    assert.equal(output.checkpoint.phase,behavior==='ignore'?'hard_deadline':'wrapping_up');
+    assert.equal(fs.readFileSync(path.join(workspace,'saved.txt'),'utf8'),'durable first section');
+    const checkpoint=JSON.parse(fs.readFileSync(receiptBase+'.checkpoint.json','utf8'));
+    assert.match(checkpoint.raw_output,/Remaining: second section/);
+    assert.equal(JSON.parse(fs.readFileSync(receiptBase+'.backend.json','utf8')).phase,'closed');
+  } finally {cleanupDir(scope);}
 });
