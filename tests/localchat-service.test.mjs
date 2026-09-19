@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { registerLocalchatClient, handleLocalchatRequest, readClientCredential } from '../scripts/lib/localchat-service.mjs';
-import { codexReadonlyConfig, claudeReadonlySettings, localchatPrompt } from '../scripts/lib/localchat-policy.mjs';
+import { codexReadonlyConfig, claudeReadonlySettings, codexCopyConfig, claudeCopySettings, localchatPrompt } from '../scripts/lib/localchat-policy.mjs';
 import { cleanTargetEnvironment } from '../scripts/lib/target-environment.mjs';
 import { writeReceipt, processIdentity, identityState, stopExecution } from '../scripts/lib/localchat-receipts.mjs';
 import { spawn } from 'node:child_process';
@@ -29,6 +29,80 @@ function environment(backend) {
     catalog: { models: [model], modelsDetail: [{ slug: model, reasoning_efforts: ['low','medium','high'], default_reasoning_effort: 'medium' }], efforts: ['low','medium','high'], access: backend === 'codex' ? ['read-only','workspace-write'] : ['default','plan','dontAsk'], approvals: ['never','on-request'], metadata: { source: 'fixture', capabilityScope: backend } } };
 }
 const dependencies = { environment };
+
+test('M3 edit configurations are explicit, selectable, scoped, and distinct from read-only configurations', async t => {
+  const f = fixture(t), capabilities = await handleLocalchatRequest(f.scope, { ...f.request, operation: 'capabilities' }, dependencies);
+  assert.deepEqual(capabilities.task_modes, ['read-only','edit']);
+  for (const backend of ['codex','claude']) {
+    const row = capabilities.backends.find(b => b.backend === backend);
+    assert.equal(row.profiles.find(p => p.id === 'edit').enabled, false);
+    assert.equal(row.edit_profiles.find(p => p.id === 'edit').enabled, true);
+    const request = { ...f.request, backend, selection: 'edit', mode: 'edit' };
+    const edit = await handleLocalchatRequest(f.scope, request, dependencies);
+    assert.equal(edit.task_mode, 'edit'); assert.equal(edit.effective_config.filesystem, 'private-task-copy-only');
+    assert.equal(edit.requested_config.access, backend === 'codex' ? 'workspace-write' : 'dontAsk');
+    const changed = await handleLocalchatRequest(f.scope, { ...request, overrides: { effort: 'low' } }, dependencies);
+    assert.notEqual(changed.profile_revision, edit.profile_revision);
+    await assert.rejects(handleLocalchatRequest(f.scope, { ...request, mode: undefined }, dependencies), { code: 'CONFIG_NOT_ALLOWED' });
+    await assert.rejects(handleLocalchatRequest(f.scope, { ...request, operation: 'probe', request_id: 'edit-probe', prompt: 'task' }, dependencies), { code: 'EDIT_REQUIRES_TASK' });
+    assert.equal(fs.existsSync(path.join(f.clientDir, `recent-${backend}.json`)), false);
+  }
+});
+
+test('M3 registered editing presets require explicit mode even when Claude access matches a read-only preset', async t => {
+  const f = fixture(t), credentialFile = path.join(f.scope, 'private/editor.json');
+  registerLocalchatClient({ ...f, clientId: 'editor', credentialFile, presets: [
+    { id: 'careful-codex', backend: 'codex', mode: 'edit', config: { model: 'codex-example', effort: 'high', access: 'workspace-write', approval: 'never' } },
+    { id: 'quick-claude', backend: 'claude', mode: 'edit', config: { model: 'claude-example', effort: 'low', access: 'dontAsk' } },
+  ] });
+  const credential = readClientCredential(credentialFile);
+  for (const [backend, selection] of [['codex','preset:careful-codex'],['claude','preset:quick-claude']]) {
+    const request = { ...f.request, client_id: 'editor', token: credential.token, backend, selection };
+    await assert.rejects(handleLocalchatRequest(f.scope, request, dependencies), { code: 'CONFIG_NOT_ALLOWED' });
+    assert.equal((await handleLocalchatRequest(f.scope, { ...request, mode: 'edit' }, dependencies)).task_mode, 'edit');
+  }
+});
+
+test('M3 native permission policies grant only the copy and exclude alternative tool surfaces', () => {
+  const copy = '/scope/private/copy/files', codex = codexCopyConfig(copy), claude = claudeCopySettings(copy);
+  assert.match(codex, /default_permissions = "localchat-edit"/);
+  assert(codex.includes(JSON.stringify(copy) + ' = "write"'));
+  assert.equal((codex.match(/= "write"/g) ?? []).length, 1);
+  assert.doesNotMatch(codex, /sandbox_mode|:workspace|:root|extends/);
+  assert.match(codex, /enabled = false/); assert.match(codex, /multi_agent = false/);
+  assert.deepEqual(claude.sandbox.filesystem, { allowWrite: [copy], denyRead: ['/'], allowRead: [copy] });
+  assert.deepEqual(claude.permissions.allow, ['Read(//scope/private/copy/files/**)','Edit(//scope/private/copy/files/**)']);
+  for (const tool of ['Bash','Agent','Task','WebFetch','WebSearch']) assert(claude.permissions.deny.includes(tool));
+  assert.equal(claude.sandbox.allowUnsandboxedCommands, false);
+});
+
+test('M3 prepared edits bind a private root once and continuations retain it without accepting caller paths', async t => {
+  const f = fixture(t), id = 'a'.repeat(32), second = 'b'.repeat(32), copy = path.join(f.clientDir, 'workspaces', id, 'files');
+  const prepare = { ...f.request, operation: 'prepare', request_id: id, selection: 'edit', mode: 'edit', prompt: 'Edit sample' };
+  await assert.rejects(handleLocalchatRequest(f.scope, prepare, dependencies), { code: 'COPY_UNAVAILABLE' });
+  fs.mkdirSync(copy, { recursive: true, mode: 0o700 });
+  await handleLocalchatRequest(f.scope, prepare, dependencies);
+  const execute = async (_client, request, config) => {
+    assert.equal(request.copy_root_id, id); assert.equal(config.task_mode, 'edit');
+    return { status: 'completed', raw_output: 'Saved copy', backend_session_id: nativeSession };
+  };
+  const run = operation(f, 'run', id);
+  for (const extra of [{ copy_root_id: id }, { cwd: f.workspace }, { mode: 'read-only' }]) {
+    await assert.rejects(handleLocalchatRequest(f.scope, { ...run, ...extra }, dependencies), { code: 'INVALID_REQUEST' });
+  }
+  await handleLocalchatRequest(f.scope, run, { environment, execute });
+  await handleLocalchatRequest(f.scope, operation(f, 'prepare', second, { parent_request_id: id, prompt: 'Follow up' }), dependencies);
+  const next = await handleLocalchatRequest(f.scope, operation(f, 'run', second), { environment, execute });
+  assert.equal(next.continuation.mode, 'codex-native-resume');
+  await assert.rejects(handleLocalchatRequest(f.scope, operation(f, 'prepare', 'c'.repeat(32), { parent_request_id: second, mode: 'read-only', prompt: 'Change mode' }), dependencies), { code: 'MODE_CHANGE_REQUIRES_NEW_TASK' });
+});
+
+test('M3 task copies reject symlink roots before creating a prepared execution', async t => {
+  const f = fixture(t), id = 'd'.repeat(32), dir = path.join(f.clientDir, 'workspaces', id);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.symlinkSync(f.workspace, path.join(dir, 'files'));
+  await assert.rejects(handleLocalchatRequest(f.scope, { ...f.request, operation: 'prepare', request_id: id, selection: 'edit', mode: 'edit', prompt: 'task' }, dependencies), { code: 'INVALID_COPY' });
+  assert.equal(fs.existsSync(path.join(f.clientDir, `prepared-${id}.json`)), false);
+});
 
 test('registration is private, scoped and never overwrites a client', t => {
   const f = fixture(t);

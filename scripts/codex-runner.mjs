@@ -599,8 +599,8 @@ async function main() {
   const executionCwd = process.cwd();
   localchatPolicy = readLocalchatPolicy();
   backendPhase(localchatPolicy, 'not_started');
-  if (localchatPolicy && (localchatPolicy.target !== "codex" || (args.resume || null) !== (localchatPolicy.resumeSession || null) || args.background || args.sandbox !== "read-only" || args.approval !== "never")) {
-    throw new Error("Localchat requires a service-bound read-only foreground Codex call");
+  if (localchatPolicy && (localchatPolicy.target !== "codex" || (args.resume || null) !== (localchatPolicy.resumeSession || null) || args.background || args.sandbox !== (localchatPolicy.mode === "edit" ? "workspace-write" : "read-only") || args.approval !== "never")) {
+    throw new Error("Localchat requires a service-bound foreground Codex call with matching permissions");
   }
   const { scopeRoot, workspaceRoot: stateRoot } = resolveScopedWorkspace(executionCwd);
   args.codexBinary = resolveActivatedCliBinary(scopeRoot, "codex");

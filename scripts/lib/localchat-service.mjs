@@ -8,7 +8,7 @@ import { getDispatchEnvironment } from './dispatch-catalog.mjs';
 import { buildDispatchProfiles, validateAgainstCatalog, defaultEffortForModel } from './dispatch-config.mjs';
 import { resolveActivatedCliBinary, inspectCodexCliCapabilities } from './activated-cli.mjs';
 import { cleanTargetEnvironment } from './target-environment.mjs';
-import { codexReadonlyConfig } from './localchat-policy.mjs';
+import { codexReadonlyConfig, codexCopyConfig } from './localchat-policy.mjs';
 import { writeReceipt, readReceipt, processIdentity, identityState, stopIdentity, executionProcesses, stopExecution } from './localchat-receipts.mjs';
 
 const SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -67,13 +67,15 @@ export function registerLocalchatClient({ scope, workspace, clientId, credential
   if (!Array.isArray(presets) || presets.length > 30) fail('INVALID_PRESETS', 'Invalid presets');
   const names = new Set();
   for (const preset of presets) {
-    object(preset, ['id', 'label', 'backend', 'config']);
+    object(preset, ['id', 'label', 'backend', 'config', 'mode']);
+    if (preset.mode !== undefined && !['read-only','edit'].includes(preset.mode)) fail('INVALID_PRESETS', 'Preset mode must be read-only or edit');
     if (typeof preset.id !== 'string' || !ID.test(preset.id) || names.has(preset.id) || !['codex','claude'].includes(preset.backend)
         || (preset.label !== undefined && (typeof preset.label !== 'string' || !preset.label.trim() || preset.label.length > 120))) fail('INVALID_PRESETS', 'Invalid preset identity');
     names.add(preset.id);
     object(preset.config, ['model','effort','access','approval']);
     if (Object.values(preset.config).some(value => typeof value !== 'string') || !preset.config.model || !preset.config.effort) fail('INVALID_PRESETS', 'Preset model and effort must be explicit strings');
-    enforceReadonly(preset.backend, preset.config);
+    if (preset.mode === 'edit') enforceEditing(preset.backend, preset.config);
+    else enforceReadonly(preset.backend, preset.config);
   }
   if (!path.isAbsolute(credentialFile) || inside(workspaceRoot, path.resolve(credentialFile))) fail('INSECURE_STORAGE', 'Keep service credentials outside the model workspace');
   privateDirectory(path.dirname(credentialFile));
@@ -89,7 +91,7 @@ export function registerLocalchatClient({ scope, workspace, clientId, credential
 }
 
 function authenticate(scope, request) {
-  object(request, ['schema','client_id','token','operation','backend','selection','overrides','request_id','prompt','workspace_id','parent_request_id']);
+  object(request, ['schema','client_id','token','operation','backend','selection','overrides','request_id','prompt','workspace_id','parent_request_id','mode']);
   if (request.schema !== 1 || typeof request.client_id !== 'string' || !ID.test(request.client_id) || !/^[a-f0-9]{64}$/.test(request.token ?? '')) fail('UNAUTHORIZED', 'Invalid service credentials');
   const scopeRoot = directory(scope), root = serviceRoot(scopeRoot);
   const clientDir = path.join(root, request.client_id);
@@ -112,13 +114,19 @@ function enforceReadonly(backend, config) {
     fail('CONFIG_NOT_ALLOWED', 'Localchat Claude supports plan or dontAsk with read-only tools');
   }
 }
-function validate(backend, config, catalog) {
+function enforceEditing(backend, config) {
+  if (backend === 'codex' ? config.access !== 'workspace-write' || config.approval !== 'never' : config.access !== 'dontAsk' || config.approval !== undefined) {
+    fail('CONFIG_NOT_ALLOWED', 'Copy editing requires Codex workspace-write/never or Claude dontAsk with scoped editing tools');
+  }
+}
+function validate(backend, config, catalog, mode = 'read-only') {
   object(config, ['model','effort','access','approval']);
   if (backend === 'claude' && config.approval !== undefined) fail('CONFIG_NOT_ALLOWED', 'Claude does not accept a Codex approval policy');
   let normalized;
   try { normalized = validateAgainstCatalog(backend, config, catalog); }
   catch (e) { fail('INVALID_CONFIG', e.message); }
-  enforceReadonly(backend, normalized);
+  if (mode === 'edit') enforceEditing(backend, normalized);
+  else enforceReadonly(backend, normalized);
   return normalized;
 }
 
@@ -127,7 +135,7 @@ function defaultEnvironment(backend, client) {
   const environment = getDispatchEnvironment(backend, client.workspace, { workspaceRoot: client.workspace, cliBinary: binary, scopeRoot: client.scope });
   return { ...environment, binary };
 }
-function profiles(client, backend, environment) {
+function profiles(client, backend, environment, mode = 'read-only') {
   const recentFile = path.join(client.clientDir, `recent-${backend}.json`);
   const recent = fs.existsSync(recentFile) ? privateJson(recentFile) : null;
   const rows = buildDispatchProfiles({ target: backend, recent, defaultConfig: environment.defaultConfig, defaultSource: environment.defaultSource, catalog: environment.catalog }).profiles;
@@ -140,35 +148,39 @@ function profiles(client, backend, environment) {
   };
   rows.push({ id: 'analysis', label: '分析', config, source: 'localchat M0 read-only preset' });
   rows.push({ id: 'analysis-deep', label: '深入分析', config: { ...config, effort: efforts.includes('high') ? 'high' : efforts.at(-1) }, source: 'localchat M0 read-only preset' });
+  rows.push({ id: 'edit', label: '修改任务副本', config: { ...config, access: backend === 'codex' ? 'workspace-write' : 'dontAsk' }, source: 'localchat M3 task-copy preset' });
   for (const preset of client.presets.filter(x => x.backend === backend)) {
-    rows.push({ id: `preset:${preset.id}`, label: preset.label ?? preset.id, config: preset.config, source: 'registered localchat preset' });
+    rows.push({ id: `preset:${preset.id}`, label: preset.label ?? preset.id, config: preset.config, source: 'registered localchat preset', ...(preset.mode === 'edit' ? { mode: 'edit' } : {}) });
   }
   return rows.map(row => {
-    try { validate(backend, row.config, environment.catalog); return { ...row, enabled: true }; }
+    try { if ((row.id === 'edit' || row.mode === 'edit') && mode !== 'edit') fail('CONFIG_NOT_ALLOWED', 'This profile requires explicit edit mode'); validate(backend, row.config, environment.catalog, mode); return { ...row, enabled: true }; }
     catch (e) { return { ...row, enabled: false, unavailable_reason: e.message }; }
   });
 }
 function resolve(client, request, environment) {
+  const mode = request.mode ?? 'read-only';
   if (typeof request.selection !== 'string') fail('SELECTION_REQUIRED', 'Select recent, default, a model row, or a named preset');
   object(request.overrides ?? {}, ['model','effort','access','approval']);
-  const row = profiles(client, request.backend, environment).find(x => x.id === request.selection);
+  const row = profiles(client, request.backend, environment, mode).find(x => x.id === request.selection);
   if (!row) fail('UNKNOWN_PROFILE', 'Configuration selection is unavailable');
-  const requested = validate(request.backend, { ...row.config, ...request.overrides }, environment.catalog);
+  if ((row.id === 'edit' || row.mode === 'edit') && mode !== 'edit') fail('CONFIG_NOT_ALLOWED', 'This profile requires explicit edit mode');
+  const requested = validate(request.backend, { ...row.config, ...request.overrides }, environment.catalog, mode);
   const sources = Object.fromEntries(Object.keys(requested).map(key => [key,
     Object.hasOwn(request.overrides ?? {}, key) ? 'explicit override' : `${row.id}: ${row.source ?? 'cc-suite catalog'}`]));
   return {
     schema: 1, workspace_id: client.workspaceId, backend: request.backend, selection: row.id,
+    task_mode: mode,
     requested_config: requested,
-    effective_config: { ...requested, filesystem: 'authorized-workspace-read-only', ...(request.backend === 'claude' ? { tools: ['Read'] } : { permission_profile: 'localchat-read' }) },
-    profile_revision: hash({ row, overrides: request.overrides ?? {}, requested }),
+    effective_config: { ...requested, filesystem: mode === 'edit' ? 'private-task-copy-only' : 'authorized-workspace-read-only', ...(request.backend === 'claude' ? { tools: mode === 'edit' ? ['Read','Edit','Write'] : ['Read'] } : { permission_profile: mode === 'edit' ? 'localchat-edit' : 'localchat-read' }) },
+    profile_revision: hash({ row, overrides: request.overrides ?? {}, requested, ...(mode === 'edit' ? { mode } : {}) }),
     resolved_at: new Date().toISOString(), sources, default_sources: environment.defaultSources,
     model_resolution: { requested: requested.model, reported: null, status: 'not-reported-by-runner' },
     cli_version: environment.catalog.metadata.codexVersion ?? environment.catalog.metadata.claudeVersion ?? null,
   };
 }
 
-function prepareCodexHome(client) {
-  const home = path.join(client.clientDir, 'codex-home');
+function prepareCodexHome(client, workspace, mode) {
+  const home = path.join(client.clientDir, mode === 'edit' ? `codex-home-${hash(workspace).slice(0,24)}` : 'codex-home');
   privateDirectory(home);
   const original = path.join(os.homedir(), '.codex/auth.json');
   const reference = path.join(home, 'auth.json');
@@ -177,24 +189,26 @@ function prepareCodexHome(client) {
     if (!fs.lstatSync(reference).isSymbolicLink() || fs.realpathSync(reference) !== fs.realpathSync(original)) fail('AUTH_REFERENCE_CHANGED', 'Codex login reference changed; inspect it locally before continuing');
   } else fs.symlinkSync(original, reference);
   const config = path.join(home, 'config.toml');
-  fs.writeFileSync(config, codexReadonlyConfig(client.workspace), { mode: 0o600 });
+  fs.writeFileSync(config, (mode === 'edit' ? codexCopyConfig : codexReadonlyConfig)(workspace), { mode: 0o600 });
   return home;
 }
 
 export function executeServiceProbe(client, request, frozen, environment, { onSpawn = () => {}, receiptBase, cancelled = () => false } = {}) {
-  const policy = { schema: 1, mode: 'read-only', workspace: client.workspace, target: request.backend, receiptBase, ...(request.resume_session ? { resumeSession: request.resume_session } : {}) };
+  const mode = frozen.task_mode ?? 'read-only';
+  const workspace = mode === 'edit' ? copyWorkspace(client, request.copy_root_id) : client.workspace;
+  const policy = { schema: 1, mode, workspace, target: request.backend, receiptBase, ...(request.resume_session ? { resumeSession: request.resume_session } : {}) };
   const env = cleanTargetEnvironment(process.env);
   for (const key of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL']) delete env[key];
   // This authenticated entry owns its lifecycle; it never borrows a composer identity.
   for (const key of Object.keys(env)) if (/^CC_SUITE_(COMPOSER|DISPATCH_BROKER|PROGRAMMATIC|REQUEST|LOCALCHAT)/.test(key)) delete env[key];
   env.CC_SUITE_SCOPE_ROOT = client.scope;
-  env.CC_SUITE_WORKSPACE_ROOT = client.workspace;
+  env.CC_SUITE_WORKSPACE_ROOT = workspace;
   env.CLAUDE_PLUGIN_DATA = path.join(client.scope, '.cc-suite/runtime');
   env.CC_SUITE_LOCALCHAT_POLICY_FD = '3';
   if (request.backend === 'codex') {
     const capabilities = inspectCodexCliCapabilities(environment.binary);
     if (!capabilities.ok) fail('CLI_INCOMPATIBLE', capabilities.problems.join('; '));
-    policy.codexHome = prepareCodexHome(client);
+    policy.codexHome = prepareCodexHome(client, workspace, mode);
     env.CODEX_HOME = policy.codexHome;
   }
   const config = frozen.requested_config;
@@ -203,7 +217,7 @@ export function executeServiceProbe(client, request, frozen, environment, { onSp
     ...(request.resume_session ? ['--resume', request.resume_session] : []), '--timeout-ms', '180000', '--prompt-stdin'];
   return new Promise((resolveResult, reject) => {
     writeReceipt(receiptBase, 'runner', { phase: 'spawning' });
-    const child = spawn(process.execPath, args, { cwd: client.workspace, env, stdio: ['pipe','pipe','pipe','pipe'], detached: true });
+    const child = spawn(process.execPath, args, { cwd: workspace, env, stdio: ['pipe','pipe','pipe','pipe'], detached: true });
     writeReceipt(receiptBase, 'runner', { phase: 'running', ...processIdentity(child.pid) });
     let stdout = '', stderr = '', timedOut = false, overflow = false;
     const kill = () => stopExecution(receiptBase);
@@ -246,6 +260,17 @@ function normalizeResult(result, exitCode = result.status === 'completed' ? 0 : 
 const receiptBaseFor = (client, id) => path.join(client.clientDir, `receipt-${id}`);
 const cancelledFor = (client, id) => fs.existsSync(path.join(client.clientDir, `cancel-${id}.json`));
 const sameConfig = (a, b) => a.profile_revision === b.profile_revision && hash(a.effective_config) === hash(b.effective_config);
+function copyWorkspace(client, rootId) {
+  if (!/^[a-f0-9]{32}$/.test(rootId ?? '')) fail('INVALID_COPY', 'A bound task-copy identity is required');
+  const copy = path.join(client.clientDir, 'workspaces', rootId, 'files');
+  // Every component is fixed by service identity; callers cannot supply a path.
+  for (const entry of [path.dirname(path.dirname(copy)), path.dirname(copy), copy]) {
+    let stat;
+    try { stat = fs.lstatSync(entry); } catch (error) { if (error.code === 'ENOENT') fail('COPY_UNAVAILABLE', 'The private task copy has not been created'); throw error; }
+    if (directory(entry) !== entry || !stat.isDirectory() || stat.mode & 0o077 || stat.uid !== process.getuid?.()) fail('INVALID_COPY', 'Task copy must be a private owned directory without symlinks');
+  }
+  return copy;
+}
 function preparedFor(client, id) {
   if (typeof id !== 'string' || !ID.test(id)) fail('INVALID_REQUEST', 'Invalid parent or execution identity');
   try { return privateJson(path.join(client.clientDir, `prepared-${id}.json`)); }
@@ -358,6 +383,7 @@ function acquireClientLock(client, request) {
 export async function handleLocalchatRequest(scope, request, dependencies = {}) {
   if (Buffer.byteLength(JSON.stringify(request)) > MAX_REQUEST) fail('REQUEST_TOO_LARGE', 'Request is too large');
   const client = authenticate(scope, request);
+  if (request.mode !== undefined && !['read-only','edit'].includes(request.mode)) fail('INVALID_MODE', 'Choose read-only or edit');
   if (!['capabilities','resolve','probe','prepare','run','inspect','cancel'].includes(request.operation)) fail('INVALID_OPERATION', 'Unsupported operation');
   if (request.operation === 'capabilities') {
     const backends = [];
@@ -365,17 +391,18 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
       try {
         const environment = (dependencies.environment ?? defaultEnvironment)(backend, client);
         backends.push({ backend, status: 'available', readiness: 'catalog-only', authentication: 'not-probed-by-discovery', metadata: environment.catalog.metadata, models: environment.catalog.modelsDetail,
-          profiles: profiles(client, backend, environment), default_config: environment.defaultConfig, default_sources: environment.defaultSources,
-          supported_access: backend === 'codex' ? ['read-only'] : ['plan','dontAsk'], ...(backend === 'codex' ? { supported_approvals: ['never'] } : {}) });
+          profiles: profiles(client, backend, environment), edit_profiles: profiles(client, backend, environment, 'edit'), default_config: environment.defaultConfig, default_sources: environment.defaultSources,
+          supported_access: backend === 'codex' ? ['read-only'] : ['plan','dontAsk'], edit_supported_access: backend === 'codex' ? ['workspace-write'] : ['dontAsk'], ...(backend === 'codex' ? { supported_approvals: ['never'] } : {}) });
       } catch (e) { backends.push({ backend, status: 'unavailable', error_code: e.code ?? 'CATALOG_UNAVAILABLE', message: e.message }); }
     }
-    return { schema: 1, stage: 'M2', workspace_id: client.workspaceId, backends, task_dispatch_available: true, execution_deadline_seconds: 180,
+    return { schema: 1, stage: 'M3', workspace_id: client.workspaceId, backends, task_dispatch_available: true, execution_deadline_seconds: 180,
+      task_modes: ['read-only','edit'], editing: { scope: 'private-task-copy-only', original_writeback: 'separate-localchat-apply', deletion_supported: false },
       continuation: { codex: 'native-resume', claude: 'saved-conversation-replay', running_supplements: 'next-turn-queue', changed_config: 'new-session-with-context-handoff' },
       interaction: { live_interrupt: false, live_approval: false, structured_clarification: false, permission_denials: 'when-reported-by-cli', response: 'explicit-follow-up-turn' } };
   }
   if (!['codex','claude'].includes(request.backend)) fail('INVALID_BACKEND', 'Choose codex or claude');
   if (['inspect','cancel'].includes(request.operation)) {
-    if (request.selection !== undefined || request.overrides !== undefined || request.prompt !== undefined || request.parent_request_id !== undefined) fail('INVALID_REQUEST', 'Control accepts only a prepared request identity');
+    if (request.selection !== undefined || request.overrides !== undefined || request.prompt !== undefined || request.parent_request_id !== undefined || request.mode !== undefined) fail('INVALID_REQUEST', 'Control accepts only a prepared request identity');
     const prepared = preparedFor(client, request.request_id);
     if (prepared.config.backend !== request.backend) fail('INVALID_BACKEND', 'Prepared execution belongs to another backend');
     if (request.operation === 'cancel') {
@@ -395,12 +422,12 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
     if (typeof request.request_id !== 'string' || !ID.test(request.request_id)) fail('INVALID_REQUEST', 'A stable request ID is required');
     const preparedFile = path.join(client.clientDir, `prepared-${request.request_id}.json`);
     if (isRun) {
-      if (request.selection !== undefined || request.overrides !== undefined || request.prompt !== undefined || request.parent_request_id !== undefined) fail('INVALID_REQUEST', 'Run accepts only a prepared request identity');
+      if (request.selection !== undefined || request.overrides !== undefined || request.prompt !== undefined || request.parent_request_id !== undefined || request.mode !== undefined) fail('INVALID_REQUEST', 'Run accepts only a prepared request identity');
       try { prepared = privateJson(preparedFile); } catch { fail('PREPARED_NOT_FOUND', 'Prepared execution is unavailable'); }
       if (prepared.config.backend !== request.backend) fail('INVALID_BACKEND', 'Prepared execution belongs to another backend');
     } else {
       if (typeof request.prompt !== 'string' || !request.prompt.trim() || Buffer.byteLength(request.prompt) > 64000) fail('INVALID_REQUEST', 'Prepared context must be nonempty and at most 64000 bytes');
-      const fingerprint = hash({ backend: request.backend, selection: request.selection, overrides: request.overrides ?? {}, prompt: request.prompt, ...(request.parent_request_id ? { parent_request_id: request.parent_request_id } : {}) });
+      const fingerprint = hash({ backend: request.backend, selection: request.selection, overrides: request.overrides ?? {}, prompt: request.prompt, ...(request.parent_request_id ? { parent_request_id: request.parent_request_id } : {}), ...(request.mode ? { mode: request.mode } : {}) });
       if (fs.existsSync(preparedFile)) {
         const prior = privateJson(preparedFile);
         if (prior.fingerprint !== fingerprint) fail('REQUEST_CONFLICT', 'Prepared ID already belongs to different content');
@@ -409,10 +436,15 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
       const environment = (dependencies.environment ?? defaultEnvironment)(request.backend, client);
       const parent = request.parent_request_id ? preparedFor(client, request.parent_request_id) : null;
       if (parent && parent.config.backend !== request.backend) fail('INVALID_BACKEND', 'M2 continuation stays on its original backend');
+      const mode = request.mode ?? parent?.config.task_mode ?? 'read-only';
+      if (parent && mode !== (parent.config.task_mode ?? 'read-only')) fail('MODE_CHANGE_REQUIRES_NEW_TASK', 'Start a new task to change between analysis and copy editing');
+      const selectionRequest = { ...request, mode };
       const config = parent && request.selection === undefined && request.overrides === undefined ? parent.config
-        : resolve(client, parent && request.selection === undefined ? { ...request, selection: parent.config.selection, overrides: { ...parent.config.requested_config, ...request.overrides } } : request, environment);
-      validate(request.backend, config.requested_config, environment.catalog);
-      const pending = { fingerprint, config, prompt: request.prompt, ...(parent ? { parent_request_id: request.parent_request_id } : {}) };
+        : resolve(client, parent && request.selection === undefined ? { ...selectionRequest, selection: parent.config.selection, overrides: { ...parent.config.requested_config, ...request.overrides } } : selectionRequest, environment);
+      validate(request.backend, config.requested_config, environment.catalog, mode);
+      const pending = { fingerprint, config, prompt: request.prompt, ...(parent ? { parent_request_id: request.parent_request_id } : {}),
+        ...(mode === 'edit' ? { copy_root_id: parent?.copy_root_id ?? request.request_id } : {}) };
+      if (mode === 'edit') copyWorkspace(client, pending.copy_root_id);
       pending.continuation = continuationFor(pending, parent);
       try { save(preparedFile, pending, true); }
       catch (error) { if (error.code === 'EEXIST') return handleLocalchatRequest(scope, request, dependencies); throw error; }
@@ -436,8 +468,9 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
   if (isRun && cancelledFor(client, request.request_id)) return { status: 'canceled', request_id: request.request_id, config: prepared.config, termination_confirmed: true };
   const environment = (dependencies.environment ?? defaultEnvironment)(request.backend, client);
   const frozen = isRun ? prepared.config : resolve(client, request, environment);
-  if (isRun) validate(request.backend, frozen.requested_config, environment.catalog);
+  if (isRun) validate(request.backend, frozen.requested_config, environment.catalog, frozen.task_mode ?? 'read-only');
   if (request.operation === 'resolve') return frozen;
+  if (!isRun && frozen.task_mode === 'edit') fail('EDIT_REQUIRES_TASK', 'Editing requires a prepared task with an isolated copy');
   const context = isRun ? executionContext(client, prepared) : { prompt: request.prompt, continuation: { mode: 'fresh' } };
   const lock = acquireClientLock(client, request);
   const pending = { status: 'indeterminate', request_id: request.request_id, config: frozen };
@@ -450,7 +483,7 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
     let response;
     try {
       const result = cancelledFor(client, request.request_id) ? { status: 'canceled', termination_confirmed: true }
-        : await (dependencies.execute ?? executeServiceProbe)(client, { ...request, ...context }, frozen, environment, { onSpawn, receiptBase, cancelled: () => cancelledFor(client, request.request_id) });
+        : await (dependencies.execute ?? executeServiceProbe)(client, { ...request, ...context, ...(prepared?.copy_root_id ? { copy_root_id: prepared.copy_root_id } : {}) }, frozen, environment, { onSpawn, receiptBase, cancelled: () => cancelledFor(client, request.request_id) });
       response = { ...result, request_id: request.request_id, config: frozen, continuation: context.continuation };
     } catch (error) {
       response = { status: error.code === 'EXECUTION_TIMEOUT' ? 'timed_out' : 'failed', request_id: request.request_id, config: frozen, error_code: error.code ?? 'PROBE_FAILED', message: error.message, ...error.execution };

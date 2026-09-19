@@ -15,7 +15,7 @@ export function readLocalchatPolicy(env = process.env) {
   const raw = fs.readFileSync(3, 'utf8');
   if (Buffer.byteLength(raw) > 16384) throw new Error('Localchat policy is too large');
   const value = JSON.parse(raw);
-  if (value.schema !== 1 || value.mode !== 'read-only' || !path.isAbsolute(value.workspace)) {
+  if (value.schema !== 1 || !['read-only', 'edit'].includes(value.mode) || !path.isAbsolute(value.workspace)) {
     throw new Error('Unsupported localchat execution policy');
   }
   if (fs.realpathSync(process.cwd()) !== value.workspace) throw new Error('Localchat workspace mismatch');
@@ -56,6 +56,13 @@ enabled = false
 `;
 }
 
+export function codexCopyConfig(workspace) {
+  // A private copy is the only writable root. Never pass --sandbox, which
+  // would override the scoped permission profile with the legacy settings.
+  return codexReadonlyConfig(workspace).replaceAll('localchat-read', 'localchat-edit')
+    .replace(`${JSON.stringify(workspace)} = "read"`, `${JSON.stringify(workspace)} = "write"`);
+}
+
 export function claudeReadonlySettings(workspace) {
   const root = workspace.replace(/^\/+/, '');
   return {
@@ -69,4 +76,14 @@ export function claudeReadonlySettings(workspace) {
       filesystem: { allowWrite: [], denyRead: ['/'], allowRead: [workspace] },
     },
   };
+}
+
+export function claudeCopySettings(workspace) {
+  const settings = claudeReadonlySettings(workspace);
+  const root = workspace.replace(/^\/+/, '');
+  // Claude evaluates Write paths using Edit rules too; Write(path) is ignored.
+  settings.permissions.allow.push(`Edit(//${root}/**)`);
+  settings.permissions.deny = settings.permissions.deny.filter(tool => !['Edit', 'Write'].includes(tool));
+  settings.sandbox.filesystem.allowWrite = [workspace];
+  return settings;
 }
