@@ -6,6 +6,9 @@ import path from 'node:path';
 import { registerLocalchatClient, handleLocalchatRequest, readClientCredential } from '../scripts/lib/localchat-service.mjs';
 import { codexReadonlyConfig, claudeReadonlySettings, localchatPrompt } from '../scripts/lib/localchat-policy.mjs';
 import { cleanTargetEnvironment } from '../scripts/lib/target-environment.mjs';
+import { writeReceipt, processIdentity, identityState, stopExecution } from '../scripts/lib/localchat-receipts.mjs';
+import { spawn } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 
 function fixture(t) {
   const scope = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cc-localchat-')));
@@ -178,4 +181,81 @@ test('large escaped results remain replayable from private storage',async t=>{
   const f=fixture(t),request={...f.request,operation:'probe',request_id:'large',prompt:'sample'},output='"'.repeat(600000);
   await handleLocalchatRequest(f.scope,request,{environment,execute:async()=>({status:'completed',raw_output:output})});
   assert.equal((await handleLocalchatRequest(f.scope,request,dependencies)).raw_output,output);
+});
+
+function operation(f, name, id, rest = {}) {
+  return { schema: 1, client_id: f.request.client_id, token: f.request.token, backend: rest.backend ?? 'codex', operation: name, request_id: id, ...rest };
+}
+const nativeSession = '12345678-1234-1234-1234-123456789abc';
+test('M2 Codex resumes only an owned successful parent with unchanged frozen configuration', async t => {
+  const f = fixture(t); let seen;
+  const execute = async (_c, r) => { seen = r; return { status: 'completed', raw_output: '第一轮', backend_session_id: nativeSession }; };
+  await handleLocalchatRequest(f.scope, operation(f, 'prepare', 'one', { selection: 'analysis', prompt: '原始要求' }), dependencies);
+  await handleLocalchatRequest(f.scope, operation(f, 'run', 'one'), { environment, execute });
+  const next = await handleLocalchatRequest(f.scope, operation(f, 'prepare', 'two', { parent_request_id: 'one', prompt: '原始要求和新增要求' }), dependencies);
+  assert.equal(next.continuation.mode, 'codex-native-resume');
+  await handleLocalchatRequest(f.scope, operation(f, 'run', 'two'), { environment, execute });
+  assert.equal(seen.resume_session, nativeSession); assert.equal(seen.prompt, '原始要求和新增要求');
+  await assert.rejects(handleLocalchatRequest(f.scope, operation(f, 'prepare', 'foreign', { parent_request_id: 'missing', prompt: 'task' }), dependencies), { code: 'PREPARED_NOT_FOUND' });
+  await assert.rejects(handleLocalchatRequest(f.scope, { ...operation(f, 'run', 'two'), resume_session: nativeSession }, dependencies), { code: 'INVALID_REQUEST' });
+  const changed = await handleLocalchatRequest(f.scope, operation(f, 'prepare', 'three', { parent_request_id: 'two', selection: 'analysis-deep', prompt: '全部用户要求' }), dependencies);
+  assert.equal(changed.continuation.mode, 'context-handoff');
+  await handleLocalchatRequest(f.scope, operation(f, 'run', 'three'), { environment, execute });
+  assert.equal(seen.resume_session, undefined); assert.match(seen.prompt, /第一轮/);
+});
+test('M2 Claude replay is bounded and explicitly reports shortened backend answers', async t => {
+  const f = fixture(t); let seen;
+  const execute = async (_c, r) => { seen = r; return { status: 'completed', raw_output: '文'.repeat(30000), backend_session_id: nativeSession }; };
+  await handleLocalchatRequest(f.scope, operation(f, 'prepare', 'one', { backend: 'claude', selection: 'analysis', prompt: '第一条原话' }), dependencies);
+  await handleLocalchatRequest(f.scope, operation(f, 'run', 'one', { backend: 'claude' }), { environment, execute });
+  await handleLocalchatRequest(f.scope, operation(f, 'prepare', 'two', { backend: 'claude', parent_request_id: 'one', prompt: '第一条原话和第二条原话\n永久约束' }), dependencies);
+  const result = await handleLocalchatRequest(f.scope, operation(f, 'run', 'two', { backend: 'claude' }), { environment, execute });
+  assert.equal(result.continuation.mode, 'saved-conversation-replay'); assert.equal(result.continuation.truncated, true); assert.equal(result.continuation.retained_turns, 1);
+  assert(seen.prompt.startsWith('第一条原话和第二条原话\n永久约束')); assert(Buffer.byteLength(seen.prompt) <= 64000); assert.equal(seen.resume_session, undefined);
+});
+test('M2 recovery imports runner completion after owner loss and never invokes inference', async t => {
+  const f = fixture(t);
+  await handleLocalchatRequest(f.scope, operation(f, 'prepare', 'saved', { selection: 'analysis', prompt: 'task' }), dependencies);
+  const prepared = JSON.parse(fs.readFileSync(path.join(f.clientDir, 'prepared-saved.json')));
+  const file = path.join(f.clientDir, 'execution-saved.json'), base = path.join(f.clientDir, 'receipt-saved');
+  fs.writeFileSync(file, JSON.stringify({ fingerprint: prepared.fingerprint, owner: { pid: 2147483647, pidStartedAt: 'old' }, deadline_at: Date.now() - 10000, response: { status: 'indeterminate' } }), { mode: 0o600 });
+  writeReceipt(base, 'backend', { phase: 'closed' }); writeReceipt(base, 'runner', { phase: 'closed' });
+  writeReceipt(base, 'result', { status: 'completed', rawOutput: 'durable result', threadId: nativeSession, jobId: 'owned-job' });
+  const result = await handleLocalchatRequest(f.scope, operation(f, 'inspect', 'saved'), { execute: () => assert.fail('must not dispatch') });
+  assert.equal(result.status, 'completed'); assert.equal(result.raw_output, 'durable result'); assert.equal(result.backend_session_id, nativeSession);
+  assert.equal((await handleLocalchatRequest(f.scope, operation(f, 'run', 'saved'), dependencies)).replayed, true);
+});
+test('M2 unknown crash boundaries stay indeterminate; canceled identities can never be run', async t => {
+  const f = fixture(t);
+  await handleLocalchatRequest(f.scope, operation(f, 'prepare', 'unknown', { selection: 'analysis', prompt: 'task' }), dependencies);
+  fs.writeFileSync(path.join(f.clientDir, 'execution-unknown.json'), JSON.stringify({ owner: { pid: 2147483647 }, deadline_at: Date.now() + 10000, response: { status: 'indeterminate' } }), { mode: 0o600 });
+  const unknown = await handleLocalchatRequest(f.scope, operation(f, 'inspect', 'unknown'), dependencies);
+  assert.equal(unknown.status, 'indeterminate'); assert.equal(unknown.termination_confirmed, false);
+  await handleLocalchatRequest(f.scope, operation(f, 'prepare', 'queued', { selection: 'analysis', prompt: 'task' }), dependencies);
+  const neverStarted = await handleLocalchatRequest(f.scope, operation(f, 'cancel', 'queued'), dependencies);
+  assert.equal(neverStarted.status, 'canceled'); assert.equal(neverStarted.termination_confirmed, true);
+  const canceled = await handleLocalchatRequest(f.scope, operation(f, 'run', 'queued'), { environment, execute: () => assert.fail('must not dispatch') });
+  assert.equal(canceled.status, 'canceled'); assert.equal(canceled.termination_confirmed, true);
+});
+
+test('M2 expired execution without a result becomes timed_out only after confirmed process exit', async t => {
+  const f = fixture(t);
+  await handleLocalchatRequest(f.scope, operation(f, 'prepare', 'expired', { selection: 'analysis', prompt: 'task' }), dependencies);
+  const file = path.join(f.clientDir, 'execution-expired.json'), base = path.join(f.clientDir, 'receipt-expired');
+  fs.writeFileSync(file, JSON.stringify({ owner: { pid: 2147483647 }, deadline_at: Date.now() - 1000, response: { status: 'indeterminate' } }), { mode: 0o600 });
+  writeReceipt(base, 'runner', { phase: 'closed' }); writeReceipt(base, 'backend', { phase: 'closed' });
+  const result = await handleLocalchatRequest(f.scope, operation(f, 'inspect', 'expired'), dependencies);
+  assert.equal(result.status, 'timed_out'); assert.equal(result.termination_confirmed, true); assert.equal(result.raw_output, undefined);
+});
+test('M2 stopping kills detached CLI descendants and refuses unverified PID identities', async t => {
+  const f = fixture(t), base = path.join(f.clientDir, 'receipt-process');
+  const child = spawn(process.execPath, ['-e', `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{stdio:'ignore'}); console.log(child.pid); setInterval(()=>{},1000);`], { detached: true, stdio: ['ignore','pipe','ignore'] });
+  t.after(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} });
+  const descendant = await new Promise(resolve => child.stdout.once('data', chunk => resolve(Number(chunk.toString().trim())))); await delay(100);
+  const backend = processIdentity(child.pid), member = processIdentity(descendant);
+  assert(backend.pidStartedAt, 'Process inspection must be available for lifecycle acceptance');
+  writeReceipt(base, 'backend', { phase: 'running', ...backend }); writeReceipt(base, 'runner', { phase: 'closed' });
+  assert.equal(stopExecution(base), true); assert.equal(identityState(backend), 'gone'); assert.equal(identityState(member), 'gone');
+  writeReceipt(base, 'backend', { phase: 'running', pid: process.pid, pidStartedAt: null });
+  assert.equal(stopExecution(base), false); assert.equal(identityState(processIdentity()), 'alive');
 });

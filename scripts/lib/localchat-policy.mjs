@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { validateReceiptBase } from './localchat-receipts.mjs';
 import { withDelegationBoundary, withClaudeDelegationBoundary } from './delegation-boundary.mjs';
 
 export function localchatPrompt(target, prompt) {
@@ -23,6 +24,8 @@ export function readLocalchatPolicy(env = process.env) {
       throw new Error('Localchat Codex configuration mismatch');
     }
   } else if (value.target !== 'claude') throw new Error('Invalid localchat target');
+  validateReceiptBase(value.receiptBase, value.workspace);
+  if (value.resumeSession !== undefined && (value.target !== 'codex' || !/^[a-f0-9-]{16,64}$/i.test(value.resumeSession))) throw new Error('Invalid Localchat continuation');
   return Object.freeze(value);
 }
 

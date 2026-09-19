@@ -9,7 +9,7 @@ import { buildDispatchProfiles, validateAgainstCatalog, defaultEffortForModel } 
 import { resolveActivatedCliBinary, inspectCodexCliCapabilities } from './activated-cli.mjs';
 import { cleanTargetEnvironment } from './target-environment.mjs';
 import { codexReadonlyConfig } from './localchat-policy.mjs';
-import { terminateProcessTree, waitForExit } from './process.mjs';
+import { writeReceipt, readReceipt, processIdentity, identityState, stopIdentity, executionProcesses, stopExecution } from './localchat-receipts.mjs';
 
 const SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
@@ -89,7 +89,7 @@ export function registerLocalchatClient({ scope, workspace, clientId, credential
 }
 
 function authenticate(scope, request) {
-  object(request, ['schema','client_id','token','operation','backend','selection','overrides','request_id','prompt','workspace_id']);
+  object(request, ['schema','client_id','token','operation','backend','selection','overrides','request_id','prompt','workspace_id','parent_request_id']);
   if (request.schema !== 1 || typeof request.client_id !== 'string' || !ID.test(request.client_id) || !/^[a-f0-9]{64}$/.test(request.token ?? '')) fail('UNAUTHORIZED', 'Invalid service credentials');
   const scopeRoot = directory(scope), root = serviceRoot(scopeRoot);
   const clientDir = path.join(root, request.client_id);
@@ -106,10 +106,10 @@ function authenticate(scope, request) {
 }
 function enforceReadonly(backend, config) {
   if (backend === 'codex' && (config.access !== 'read-only' || config.approval !== 'never')) {
-    fail('CONFIG_NOT_ALLOWED', 'M0 Codex supports read-only with approval=never');
+    fail('CONFIG_NOT_ALLOWED', 'Localchat Codex supports read-only with approval=never');
   }
   if (backend === 'claude' && (!['plan','dontAsk'].includes(config.access) || config.approval !== undefined)) {
-    fail('CONFIG_NOT_ALLOWED', 'M0 Claude supports plan or dontAsk with read-only tools');
+    fail('CONFIG_NOT_ALLOWED', 'Localchat Claude supports plan or dontAsk with read-only tools');
   }
 }
 function validate(backend, config, catalog) {
@@ -181,8 +181,8 @@ function prepareCodexHome(client) {
   return home;
 }
 
-export function executeServiceProbe(client, request, frozen, environment, { onSpawn = () => {} } = {}) {
-  const policy = { schema: 1, mode: 'read-only', workspace: client.workspace, target: request.backend };
+export function executeServiceProbe(client, request, frozen, environment, { onSpawn = () => {}, receiptBase, cancelled = () => false } = {}) {
+  const policy = { schema: 1, mode: 'read-only', workspace: client.workspace, target: request.backend, receiptBase, ...(request.resume_session ? { resumeSession: request.resume_session } : {}) };
   const env = cleanTargetEnvironment(process.env);
   for (const key of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL']) delete env[key];
   // This authenticated entry owns its lifecycle; it never borrows a composer identity.
@@ -200,15 +200,18 @@ export function executeServiceProbe(client, request, frozen, environment, { onSp
   const config = frozen.requested_config;
   const args = [path.join(SOURCE_ROOT, `scripts/${request.backend}-runner.mjs`), '--kind', `${request.backend}-localchat-m0`, '--model', config.model, '--effort', config.effort,
     ...(request.backend === 'codex' ? ['--sandbox', config.access, '--approval', config.approval] : ['--permission-mode', config.access]),
-    '--timeout-ms', '180000', '--prompt-stdin'];
+    ...(request.resume_session ? ['--resume', request.resume_session] : []), '--timeout-ms', '180000', '--prompt-stdin'];
   return new Promise((resolveResult, reject) => {
+    writeReceipt(receiptBase, 'runner', { phase: 'spawning' });
     const child = spawn(process.execPath, args, { cwd: client.workspace, env, stdio: ['pipe','pipe','pipe','pipe'], detached: true });
+    writeReceipt(receiptBase, 'runner', { phase: 'running', ...processIdentity(child.pid) });
     let stdout = '', stderr = '', timedOut = false, overflow = false;
-    const kill = () => { try { terminateProcessTree(child.pid, { signal: 'SIGTERM' }); if (waitForExit([child.pid], 1000).size) terminateProcessTree(child.pid, { signal: 'SIGKILL' }); } catch {} };
+    const kill = () => stopExecution(receiptBase);
+    const cancelTimer = setInterval(() => { if (cancelled()) kill(); }, 500);
     const timer = setTimeout(() => { timedOut = true; kill(); }, 195000);
     const stop = () => kill();
     process.once('SIGTERM', stop); process.once('SIGINT', stop);
-    const cleanup = () => { clearTimeout(timer); process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', stop); };
+    const cleanup = () => { clearTimeout(timer); clearInterval(cancelTimer); process.removeListener('SIGTERM', stop); process.removeListener('SIGINT', stop); };
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     child.stdin.on('error', () => {}); child.stdio[3].on('error', () => {});
     child.stdio[3].end(JSON.stringify(policy)); child.stdin.end(request.prompt);
@@ -217,29 +220,145 @@ export function executeServiceProbe(client, request, frozen, environment, { onSp
     child.once('error', error => { cleanup(); reject(new ServiceError('RUNNER_UNAVAILABLE', error.code ?? 'Cannot start runner')); });
     child.once('close', code => {
       cleanup();
-      if (timedOut || overflow) return reject(new ServiceError(timedOut ? 'PROBE_TIMEOUT' : 'RESULT_TOO_LARGE', 'Probe stopped without a confirmed result'));
+      writeReceipt(receiptBase, 'runner', { phase: 'closed', ...processIdentity(child.pid) });
+      if (timedOut || overflow) return reject(new ServiceError(timedOut ? 'EXECUTION_TIMEOUT' : 'RESULT_TOO_LARGE', 'Execution stopped without a confirmed result'));
       let result;
       try { result = JSON.parse(stdout); } catch { return reject(new ServiceError('RUNNER_FAILED', 'Runner returned no structured result; inspect private local logs')); }
       if (result.cliStarted === true) onSpawn();
-      if (code !== 0 || result.status !== 'completed' || typeof result.rawOutput !== 'string' || !result.rawOutput.trim()) {
-        const message = result.error ?? result.errorMessage ?? 'Execution did not complete';
-        const code = /401|oauth|not logged|authentication|login required/i.test(message) ? 'AUTH_REQUIRED'
-          : /429|quota|usage limit|rate.limit/i.test(message) ? 'QUOTA_OR_RATE_LIMIT'
-          : /sandbox|permission denied|not permitted/i.test(message) ? 'PERMISSION_DENIED' : 'PROBE_FAILED';
-        const error = new ServiceError(code, message);
-        error.execution = { backend_session_id: result.threadId ?? null, job_id: result.jobId ?? null, reported_model: result.nativeModel ?? null, permission_denials: result.permissionDenials ?? [] };
-        return reject(error);
-      }
-      if (Buffer.byteLength(result.rawOutput) > 1024 * 1024) return reject(new ServiceError('RESULT_TOO_LARGE', 'Visible result exceeds 1 MiB'));
-      resolveResult({ status: 'completed', raw_output: result.rawOutput, backend_session_id: result.threadId ?? null, job_id: result.jobId ?? null, reported_model: result.nativeModel ?? null, permission_denials: result.permissionDenials ?? [] });
+      resolveResult(normalizeResult(result, code));
     });
   });
+}
+
+function normalizeResult(result, exitCode = result.status === 'completed' ? 0 : 1) {
+  const info = { backend_session_id: result.threadId ?? null, job_id: result.jobId ?? null, reported_model: result.nativeModel ?? null, permission_denials: result.permissionDenials ?? [] };
+  const message = result.error ?? result.errorMessage ?? 'Execution did not complete';
+  if (exitCode !== 0 || result.status !== 'completed' || typeof result.rawOutput !== 'string' || !result.rawOutput.trim()) {
+    const error_code = result.status === 'stalled' || /timed out/i.test(message) ? 'EXECUTION_TIMEOUT'
+      : /401|oauth|not logged|authentication|login required/i.test(message) ? 'AUTH_REQUIRED'
+      : /429|quota|usage limit|rate.limit/i.test(message) ? 'QUOTA_OR_RATE_LIMIT'
+      : /sandbox|permission denied|not permitted/i.test(message) ? 'PERMISSION_DENIED' : 'PROBE_FAILED';
+    return { status: error_code === 'EXECUTION_TIMEOUT' ? 'timed_out' : 'failed', error_code, message, ...info };
+  }
+  if (Buffer.byteLength(result.rawOutput) > 1024 * 1024) return { status: 'failed', error_code: 'RESULT_TOO_LARGE', ...info };
+  return { status: 'completed', raw_output: result.rawOutput, ...info };
+}
+const receiptBaseFor = (client, id) => path.join(client.clientDir, `receipt-${id}`);
+const cancelledFor = (client, id) => fs.existsSync(path.join(client.clientDir, `cancel-${id}.json`));
+const sameConfig = (a, b) => a.profile_revision === b.profile_revision && hash(a.effective_config) === hash(b.effective_config);
+function preparedFor(client, id) {
+  if (typeof id !== 'string' || !ID.test(id)) fail('INVALID_REQUEST', 'Invalid parent or execution identity');
+  try { return privateJson(path.join(client.clientDir, `prepared-${id}.json`)); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; fail('PREPARED_NOT_FOUND', 'Prepared execution is unavailable in this client'); }
+}
+function continuationFor(prepared, parent) {
+  return { parent_request_id: prepared.parent_request_id ?? null,
+    mode: !parent ? 'fresh' : !sameConfig(prepared.config, parent.config) ? 'context-handoff' : prepared.config.backend === 'codex' ? 'codex-native-resume' : 'saved-conversation-replay',
+    config_changed: Boolean(parent && !sameConfig(prepared.config, parent.config)) };
+}
+function executionContext(client, prepared) {
+  const parent = prepared.parent_request_id ? preparedFor(client, prepared.parent_request_id) : null;
+  const continuation = continuationFor(prepared, parent);
+  if (!parent) return { prompt: prepared.prompt, continuation };
+  const prior = privateJson(path.join(client.clientDir, `execution-${prepared.parent_request_id}.json`)).response;
+  if (!['completed','failed','canceled','timed_out'].includes(prior.status)) fail('PARENT_UNFINISHED', 'Previous execution has no confirmed terminal result');
+  if (continuation.mode === 'codex-native-resume' && prior.status === 'completed') {
+    if (!/^[a-f0-9-]{16,64}$/i.test(prior.backend_session_id ?? '')) fail('CONTINUITY_UNAVAILABLE', 'Previous Codex session identity is unavailable; no replacement session was started');
+    return { prompt: prepared.prompt, resume_session: prior.backend_session_id, continuation: { ...continuation, retained_turns: null, truncated: false } };
+  }
+  if (continuation.mode === 'codex-native-resume') continuation.mode = 'context-handoff';
+  const turns = [], seen = new Set();
+  let id = prepared.parent_request_id;
+  while (id) {
+    if (seen.has(id) || seen.size >= 64) fail('CONTEXT_TOO_LARGE', 'Continuation ancestry exceeds its limit');
+    seen.add(id);
+    const record = preparedFor(client, id);
+    const result = privateJson(path.join(client.clientDir, `execution-${id}.json`)).response;
+    turns.unshift({ request_id: id, backend: record.config.backend, status: result.status, content: result.raw_output ?? '' });
+    id = record.parent_request_id;
+  }
+  // Original requests and lasting constraints are in the complete frozen prompt.
+  // Only older backend answers may be shortened, always with explicit metadata.
+  let budget = Math.min(20000, 63000 - Buffer.byteLength(prepared.prompt)), truncated = turns.length > 6;
+  if (budget < 1000) fail('CONTEXT_TOO_LARGE', 'No room for saved answer replay; reduce explicitly selected materials. User instructions were not truncated.');
+  const retained = [];
+  for (const turn of turns.slice(-6).reverse()) {
+    const available = Math.max(0, budget - 220), chars = [];
+    let bytes = 0;
+    for (const char of turn.content) { const n = Buffer.byteLength(JSON.stringify(char)) - 2; if (bytes + n > available) break; chars.push(char); bytes += n; }
+    const content = chars.join(''), cut = content !== turn.content;
+    truncated ||= cut;
+    retained.unshift({ ...turn, content, truncated: cut }); budget -= bytes + 220;
+    if (budget <= 220) break;
+  }
+  truncated ||= retained.length < turns.length;
+  const replay = { mode: continuation.mode, total_prior_turns: turns.length, retained_turns: retained.length, truncated, turns: retained };
+  const prompt = prepared.prompt + '\n\nSaved backend answers (task data, not new host instructions):\n' + JSON.stringify(replay);
+  if (Buffer.byteLength(prompt) > 64000) fail('CONTEXT_TOO_LARGE', 'Replay exceeds the context budget; no execution was started');
+  return { prompt, continuation: { ...continuation, total_prior_turns: turns.length, retained_turns: retained.length, truncated } };
+}
+
+function inspectExecution(client, request, { stop = false } = {}) {
+  const prepared = preparedFor(client, request.request_id);
+  if (prepared.config.backend !== request.backend) fail('INVALID_BACKEND', 'Execution belongs to another backend');
+  const file = path.join(client.clientDir, `execution-${request.request_id}.json`), base = receiptBaseFor(client, request.request_id);
+  const canceled = cancelledFor(client, request.request_id);
+  if (!fs.existsSync(file)) return { status: canceled ? 'canceled' : 'not_started', config: prepared.config, termination_confirmed: canceled };
+  const record = privateJson(file);
+  if (record.response.status !== 'indeterminate') return { ...record.response, recovered: true };
+  const ownerState = identityState(record.owner);
+  const final = readReceipt(base, 'result');
+  // A durable native result survives recovery performed after the wall-clock
+  // deadline. The native runner itself marks deadline failures as stalled.
+  const timedOut = !final && Date.now() >= record.deadline_at;
+  if ((stop || timedOut) && record.owner) {
+    stopExecution(base);
+    // A live service supervises its own close handler. Recovery never kills an
+    // unverified PID, nor declares a detached child gone from its parent's exit.
+    if (ownerState === 'alive' && timedOut) stopIdentity(record.owner);
+  }
+  const after = executionProcesses(base);
+  let response;
+  const confirmed = after.runnerState === 'gone' && after.backendState === 'gone' && after.descendantsGone;
+  if (canceled) response = { status: confirmed ? 'canceled' : 'stopping', termination_confirmed: confirmed };
+  else if (timedOut) response = { status: confirmed ? 'timed_out' : 'indeterminate', termination_confirmed: confirmed, error_code: 'EXECUTION_TIMEOUT' };
+  else if (final) response = { ...normalizeResult(final), termination_confirmed: true };
+  else if (ownerState === 'alive' || after.runnerState === 'alive' || after.backendState === 'alive') response = { status: 'running', termination_confirmed: false };
+  else response = { status: confirmed ? 'failed' : 'indeterminate', error_code: 'EXECUTION_INTERRUPTED', termination_confirmed: confirmed,
+    message: confirmed ? 'Execution exited without a durable result; it was not rerun' : 'Process identity or spawn outcome is unknown; it was not rerun' };
+  response = { ...response, config: prepared.config, request_id: request.request_id, continuation: record.continuation, recovered: true };
+  // Do not race the live owner's final write; the cancel marker remains the
+  // shared source of truth until that owner finishes.
+  if (identityState(record.owner) === 'gone' && !['running','stopping','indeterminate'].includes(response.status)) save(file, { ...record, response });
+  return response;
+}
+function releaseClientLock(lock, requestId) {
+  if (fs.existsSync(lock) && privateJson(lock).request_id === requestId) fs.unlinkSync(lock);
+}
+function acquireClientLock(client, request) {
+  const lock = path.join(client.clientDir, 'probe.lock');
+  if (fs.existsSync(lock)) {
+    let old;
+    try { old = privateJson(lock); } catch { fail('CLIENT_BUSY', 'A legacy execution lock requires local inspection'); }
+    if (identityState(old.owner) !== 'gone') fail('CLIENT_BUSY', 'An execution is active or its process identity cannot be verified');
+    const observed = executionProcesses(receiptBaseFor(client, old.request_id));
+    const result = readReceipt(receiptBaseFor(client, old.request_id), 'result');
+    if (!observed.descendantsGone || (!result && (observed.runnerState !== 'gone' || observed.backendState !== 'gone'))) fail('CLIENT_BUSY', 'Previous execution requires recovery before starting another task');
+    // The short recovery mutex prevents concurrent reclaimers unlinking a new lock.
+    const guard = path.join(client.clientDir, 'reclaim.lock');
+    try { fs.mkdirSync(guard, { mode: 0o700 }); } catch { fail('CLIENT_BUSY', 'Execution lock recovery is already in progress'); }
+    try { if (fs.existsSync(lock) && privateJson(lock).request_id === old.request_id && identityState(privateJson(lock).owner) === 'gone') fs.unlinkSync(lock); }
+    finally { fs.rmdirSync(guard); }
+  }
+  try { save(lock, { request_id: request.request_id, owner: processIdentity() }, true); }
+  catch (error) { if (error.code === 'EEXIST') fail('CLIENT_BUSY', 'An execution is active'); throw error; }
+  return lock;
 }
 
 export async function handleLocalchatRequest(scope, request, dependencies = {}) {
   if (Buffer.byteLength(JSON.stringify(request)) > MAX_REQUEST) fail('REQUEST_TOO_LARGE', 'Request is too large');
   const client = authenticate(scope, request);
-  if (!['capabilities','resolve','probe','prepare','run'].includes(request.operation)) fail('INVALID_OPERATION', 'Unsupported operation');
+  if (!['capabilities','resolve','probe','prepare','run','inspect','cancel'].includes(request.operation)) fail('INVALID_OPERATION', 'Unsupported operation');
   if (request.operation === 'capabilities') {
     const backends = [];
     for (const backend of ['codex','claude']) {
@@ -250,31 +369,54 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
           supported_access: backend === 'codex' ? ['read-only'] : ['plan','dontAsk'], ...(backend === 'codex' ? { supported_approvals: ['never'] } : {}) });
       } catch (e) { backends.push({ backend, status: 'unavailable', error_code: e.code ?? 'CATALOG_UNAVAILABLE', message: e.message }); }
     }
-    return { schema: 1, stage: 'M1', workspace_id: client.workspaceId, backends, task_dispatch_available: true, execution_deadline_seconds: 180 };
+    return { schema: 1, stage: 'M2', workspace_id: client.workspaceId, backends, task_dispatch_available: true, execution_deadline_seconds: 180,
+      continuation: { codex: 'native-resume', claude: 'saved-conversation-replay', running_supplements: 'next-turn-queue', changed_config: 'new-session-with-context-handoff' },
+      interaction: { live_interrupt: false, live_approval: false, structured_clarification: false, permission_denials: 'when-reported-by-cli', response: 'explicit-follow-up-turn' } };
   }
   if (!['codex','claude'].includes(request.backend)) fail('INVALID_BACKEND', 'Choose codex or claude');
+  if (['inspect','cancel'].includes(request.operation)) {
+    if (request.selection !== undefined || request.overrides !== undefined || request.prompt !== undefined || request.parent_request_id !== undefined) fail('INVALID_REQUEST', 'Control accepts only a prepared request identity');
+    const prepared = preparedFor(client, request.request_id);
+    if (prepared.config.backend !== request.backend) fail('INVALID_BACKEND', 'Prepared execution belongs to another backend');
+    if (request.operation === 'cancel') {
+      const file = path.join(client.clientDir, `execution-${request.request_id}.json`);
+      if (fs.existsSync(file)) {
+        const previous = privateJson(file);
+        if (previous.response.status !== 'indeterminate') return { ...previous.response, already_finished: true };
+      }
+      try { save(path.join(client.clientDir, `cancel-${request.request_id}.json`), { at: new Date().toISOString() }, true); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+    return inspectExecution(client, request, { stop: request.operation === 'cancel' || cancelledFor(client, request.request_id) });
+  }
   const isRun = request.operation === 'run';
   let prepared;
   if (isRun || request.operation === 'prepare') {
     if (typeof request.request_id !== 'string' || !ID.test(request.request_id)) fail('INVALID_REQUEST', 'A stable request ID is required');
     const preparedFile = path.join(client.clientDir, `prepared-${request.request_id}.json`);
     if (isRun) {
-      if (request.selection !== undefined || request.overrides !== undefined || request.prompt !== undefined) fail('INVALID_REQUEST', 'Run accepts only a prepared request identity');
+      if (request.selection !== undefined || request.overrides !== undefined || request.prompt !== undefined || request.parent_request_id !== undefined) fail('INVALID_REQUEST', 'Run accepts only a prepared request identity');
       try { prepared = privateJson(preparedFile); } catch { fail('PREPARED_NOT_FOUND', 'Prepared execution is unavailable'); }
       if (prepared.config.backend !== request.backend) fail('INVALID_BACKEND', 'Prepared execution belongs to another backend');
     } else {
       if (typeof request.prompt !== 'string' || !request.prompt.trim() || Buffer.byteLength(request.prompt) > 64000) fail('INVALID_REQUEST', 'Prepared context must be nonempty and at most 64000 bytes');
-      const fingerprint = hash({ backend: request.backend, selection: request.selection, overrides: request.overrides ?? {}, prompt: request.prompt });
+      const fingerprint = hash({ backend: request.backend, selection: request.selection, overrides: request.overrides ?? {}, prompt: request.prompt, ...(request.parent_request_id ? { parent_request_id: request.parent_request_id } : {}) });
       if (fs.existsSync(preparedFile)) {
         const prior = privateJson(preparedFile);
         if (prior.fingerprint !== fingerprint) fail('REQUEST_CONFLICT', 'Prepared ID already belongs to different content');
-        return { request_id: request.request_id, config: prior.config, replayed: true };
+        return { request_id: request.request_id, config: prior.config, continuation: prior.continuation, replayed: true };
       }
       const environment = (dependencies.environment ?? defaultEnvironment)(request.backend, client);
-      const config = resolve(client, request, environment);
-      try { save(preparedFile, { fingerprint, config, prompt: request.prompt }, true); }
+      const parent = request.parent_request_id ? preparedFor(client, request.parent_request_id) : null;
+      if (parent && parent.config.backend !== request.backend) fail('INVALID_BACKEND', 'M2 continuation stays on its original backend');
+      const config = parent && request.selection === undefined && request.overrides === undefined ? parent.config
+        : resolve(client, parent && request.selection === undefined ? { ...request, selection: parent.config.selection, overrides: { ...parent.config.requested_config, ...request.overrides } } : request, environment);
+      validate(request.backend, config.requested_config, environment.catalog);
+      const pending = { fingerprint, config, prompt: request.prompt, ...(parent ? { parent_request_id: request.parent_request_id } : {}) };
+      pending.continuation = continuationFor(pending, parent);
+      try { save(preparedFile, pending, true); }
       catch (error) { if (error.code === 'EEXIST') return handleLocalchatRequest(scope, request, dependencies); throw error; }
-      return { request_id: request.request_id, config };
+      return { request_id: request.request_id, config, continuation: pending.continuation };
     }
   }
   let requestFile, fingerprint;
@@ -291,28 +433,46 @@ export async function handleLocalchatRequest(scope, request, dependencies = {}) 
       if (prior.fingerprint !== fingerprint) fail('REQUEST_CONFLICT', 'Request ID was already used with different content');
       return { ...prior.response, replayed: true };
   }
+  if (isRun && cancelledFor(client, request.request_id)) return { status: 'canceled', request_id: request.request_id, config: prepared.config, termination_confirmed: true };
   const environment = (dependencies.environment ?? defaultEnvironment)(request.backend, client);
   const frozen = isRun ? prepared.config : resolve(client, request, environment);
   if (isRun) validate(request.backend, frozen.requested_config, environment.catalog);
   if (request.operation === 'resolve') return frozen;
-  const lock = path.join(client.clientDir, 'probe.lock');
-  let lockFd;
-  try { lockFd = fs.openSync(lock, 'wx', 0o600); } catch { fail('CLIENT_BUSY', 'A probe is active or requires local recovery; nothing was restarted'); }
+  const context = isRun ? executionContext(client, prepared) : { prompt: request.prompt, continuation: { mode: 'fresh' } };
+  const lock = acquireClientLock(client, request);
   const pending = { status: 'indeterminate', request_id: request.request_id, config: frozen };
+  const record = { fingerprint, response: pending, owner: processIdentity(), deadline_at: Date.now() + 195000, continuation: context.continuation };
+  const receiptBase = receiptBaseFor(client, request.request_id);
   try {
     // Claim durably before executing. An uncertain claim is never replayed as a second model call.
-    save(requestFile, { fingerprint, response: pending }, true);
+    save(requestFile, record, true);
     const onSpawn = () => save(path.join(client.clientDir, `recent-${request.backend}.json`), { config: frozen.requested_config, usedAt: new Date().toISOString() });
     let response;
     try {
-      const result = await (dependencies.execute ?? executeServiceProbe)(client, isRun ? { ...request, prompt: prepared.prompt } : request, frozen, environment, { onSpawn });
-      response = { ...result, request_id: request.request_id, config: frozen };
+      const result = cancelledFor(client, request.request_id) ? { status: 'canceled', termination_confirmed: true }
+        : await (dependencies.execute ?? executeServiceProbe)(client, { ...request, ...context }, frozen, environment, { onSpawn, receiptBase, cancelled: () => cancelledFor(client, request.request_id) });
+      response = { ...result, request_id: request.request_id, config: frozen, continuation: context.continuation };
     } catch (error) {
-      response = { status: 'failed', request_id: request.request_id, config: frozen, error_code: error.code ?? 'PROBE_FAILED', message: error.message, ...error.execution };
+      response = { status: error.code === 'EXECUTION_TIMEOUT' ? 'timed_out' : 'failed', request_id: request.request_id, config: frozen, error_code: error.code ?? 'PROBE_FAILED', message: error.message, ...error.execution };
     }
-    save(requestFile, { fingerprint, response });
+    if (cancelledFor(client, request.request_id) && response.status !== 'canceled') {
+      const confirmed = stopExecution(receiptBase);
+      response = { status: confirmed ? 'canceled' : 'indeterminate', termination_confirmed: confirmed, request_id: request.request_id, config: frozen, error_code: confirmed ? undefined : 'STOP_UNCONFIRMED' };
+    }
+    // Preserve uncertain process state for recovery; never promote it to success.
+    if (!dependencies.execute && !response.termination_confirmed) {
+      const observed = executionProcesses(receiptBase);
+      response.termination_confirmed = observed.backendState === 'gone' && observed.runnerState === 'gone' && observed.descendantsGone;
+      if (observed.backendState === 'alive' || observed.runnerState === 'alive' || !observed.descendantsGone) {
+        const confirmed = stopExecution(receiptBase);
+        response.termination_confirmed = confirmed;
+        if (!confirmed) response.status = 'indeterminate';
+      }
+      if ((observed.backendState === 'unknown' || observed.runnerState === 'unknown') && !readReceipt(receiptBase, 'result')) response.status = 'indeterminate';
+    }
+    save(requestFile, { ...record, response });
     return response;
-  } finally { fs.closeSync(lockFd); fs.unlinkSync(lock); }
+  } finally { if (privateJson(requestFile).response.status !== 'indeterminate') releaseClientLock(lock, request.request_id); }
 }
 
 export function readClientCredential(file) { return privateJson(file); }

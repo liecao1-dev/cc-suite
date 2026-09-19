@@ -41,6 +41,8 @@ if (args.length === 1 && args[0] === "--version") {
     process.stdout.write(JSON.stringify({type:"thread.started",thread_id:"12345678-1234-1234-1234-123456789abc"}) + "\\n");
   });
 }
+
+
 `, "utf8");
   fs.chmodSync(file, 0o755);
 }
@@ -166,4 +168,32 @@ test("codex runner rejects simultaneous argv and stdin prompts", () => {
   ], { input: "stdin", encoding: "utf8" });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /either --prompt-stdin or -- <prompt>/);
+});
+
+test('Localchat Codex resume requires the matching service policy session and keeps strict read-only configuration', () => {
+  const scope = makeTempDir('codex-localchat-m2-');
+  try {
+    const workspace = path.join(scope, 'workspace'), bin = path.join(scope, 'bin'), home = path.join(scope, 'private-home');
+    for (const directory of [workspace, bin, home]) fs.mkdirSync(directory);
+    const canonical = fs.realpathSync(workspace), codexBinary = path.join(bin, 'codex'), policyFile = path.join(scope, 'policy.json');
+    writeFakeCodex(codexBinary); writeActivation(scope, codexBinary);
+    const session = '87654321-4321-4321-4321-cba987654321';
+    for (const allowed of [false, true]) {
+      fs.writeFileSync(policyFile, JSON.stringify({ schema: 1, target: 'codex', mode: 'read-only', workspace: canonical, codexHome: fs.realpathSync(home), ...(allowed ? { resumeSession: session } : {}) }));
+      const fd = fs.openSync(policyFile, 'r');
+      let result;
+      try {
+        result = spawnSync(process.execPath, [runner, '--model','test-model','--effort','medium','--sandbox','read-only','--approval','never','--resume',session,'--timeout-ms','5000','--prompt-stdin'], {
+          cwd: workspace, input: '继续只读任务', encoding: 'utf8', stdio: ['pipe','pipe','pipe',fd],
+          env: { ...process.env, CODEX_HOME: home, CC_SUITE_LOCALCHAT_POLICY_FD: '3', CC_SUITE_SCOPE_ROOT: fs.realpathSync(scope), CC_SUITE_WORKSPACE_ROOT: canonical,
+            CAPTURE_ARGV: path.join(scope,'argv.json'), CAPTURE_PROMPT: path.join(scope,'prompt.txt') },
+        });
+      } finally { fs.closeSync(fd); }
+      if (!allowed) { assert.notEqual(result.status, 0); assert.equal(fs.existsSync(path.join(scope,'argv.json')), false); continue; }
+      assert.equal(result.status, 0, result.stderr);
+      const argv = JSON.parse(fs.readFileSync(path.join(scope, 'argv.json')));
+      assert.deepEqual(argv.slice(0,4), ['--strict-config','exec','resume',session]); assert(!argv.includes('--sandbox'));
+      assert(argv.includes('approval_policy="never"'));
+    }
+  } finally { cleanupDir(scope); }
 });

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { backendPhase, writeReceipt, stopBackend } from './lib/localchat-receipts.mjs';
 // Run or resume one Claude Code task with a hard deadline and project-local state.
 
 import fs from "node:fs";
@@ -339,13 +340,14 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
     appendLog(logFile, `Access: read ${access.scopeRoot}; write ${localchatPolicy ? "none" : access.workspaceRoot}`);
     appendLog(logFile, `Klode MCP: ${mcpServers.klode ? "forwarded from user registration" : "not registered"}`);
     appendLog(logFile, `Deadline: ${Math.round(args.timeoutMs / 1000)}s`);
+    backendPhase(localchatPolicy, 'spawning');
     const child = spawn(claudeBinary, argv, {
       cwd: access.executionCwd,
       env: documentTools.env,
       stdio: ["pipe", "pipe", "pipe"],
       detached: true,
     });
-    child.once("spawn", () => { cliStarted = true; recordRecentAfterSpawn(cwd, args, logFile); });
+    child.once("spawn", () => { backendPhase(localchatPolicy, 'running', child.pid); cliStarted = true; recordRecentAfterSpawn(cwd, args, logFile); });
     const releaseSignals = installChildSignalForwarding(child);
     let stdoutBuffer = "";
     let stderr = "";
@@ -363,7 +365,13 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
       if (typeof event?.session_id === "string" && event.session_id) sessionId = event.session_id;
       if (event?.type === "system" && event.subtype === "init" && typeof event.model === "string") nativeModel = event.model;
       if (event?.type === "system" && event.subtype === "permission_denied" && permissionDenials.length < 100) permissionDenials.push({ tool: event.tool_name, reason: event.decision_reason_type ?? "permission" });
-      if (event?.type === "result") terminal = event;
+      if (event?.type === "result") {
+        terminal = event;
+        for (const denial of Array.isArray(event.permission_denials) ? event.permission_denials : []) {
+          if (permissionDenials.length >= 100) break;
+          if (typeof denial.tool_name === 'string') permissionDenials.push({ tool: denial.tool_name.slice(0, 128), reason: 'permission' });
+        }
+      }
     }
 
     function consumeBufferedLines(final = false) {
@@ -387,6 +395,7 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
     }
     const deadline = setTimeout(() => {
       timedOut = true;
+      if (localchatPolicy?.receiptBase) { stopBackend(localchatPolicy.receiptBase); return; }
       try { terminateProcessTree(child.pid, { signal: "SIGTERM" }); } catch {}
       setTimeout(() => {
         if (waitForExit([child.pid], 0).size > 0) {
@@ -407,6 +416,7 @@ function executeClaudeDirectAttempt(cwd, args, logFile, attemptNumber) {
     });
     child.on("error", (error) => finish({ status: "failed", threadId: sessionId, rawOutput: "", error: error.message }));
     child.on("close", (code, signal) => {
+      backendPhase(localchatPolicy, 'closed', child.pid);
       consumeBufferedLines(true);
       // The successful result is the user-visible Claude answer. Preserve it
       // exactly; the Codex Stop hook compares this value without normalization.
@@ -470,6 +480,7 @@ function executeClaude(cwd, args, logFile) {
 async function main() {
   const args = parseArgs(process.argv);
   localchatPolicy = readLocalchatPolicy();
+  backendPhase(localchatPolicy, 'not_started');
   if (localchatPolicy && (localchatPolicy.target !== "claude" || args.resume || !["plan", "dontAsk"].includes(args.permissionMode))) {
     throw new Error("Localchat M0 requires a fresh read-only Claude call");
   }
@@ -510,6 +521,7 @@ async function main() {
   });
   activeJob = null;
 
+  writeReceipt(localchatPolicy?.receiptBase, 'result', { jobId, ...result, cliStarted });
   process.stdout.write(`${JSON.stringify({ jobId, ...result, ...(localchatPolicy ? { cliStarted } : {}) })}\n`);
   if (result.status !== "completed") process.exitCode = 1;
 }

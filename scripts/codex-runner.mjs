@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { backendPhase, writeReceipt, stopBackend } from './lib/localchat-receipts.mjs';
 // codex-runner.mjs — Run Codex tasks in foreground or background with job tracking.
 //
 // Usage:
@@ -266,6 +267,7 @@ function executeCodex(cwd, args, logFile) {
     // detached:true makes the child a process-group leader (POSIX), so the
     // deadline can terminate the whole group — codex tool subprocesses
     // included — instead of only the direct child.
+    backendPhase(localchatPolicy, 'spawning');
     const child = spawn(args.codexBinary, codexArgs, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
@@ -273,6 +275,7 @@ function executeCodex(cwd, args, logFile) {
       detached: true,
     });
     child.once("spawn", () => {
+      backendPhase(localchatPolicy, 'running', child.pid);
       cliStarted = true;
       if (!args.recordRecent) return;
       try {
@@ -349,6 +352,7 @@ function executeCodex(cwd, args, logFile) {
       guarded(() => {
         timedOut = true;
         appendLog(logFile, `Deadline exceeded (${Math.round(args.timeoutMs / 1000)}s) — terminating`);
+        if (localchatPolicy?.receiptBase) { stopBackend(localchatPolicy.receiptBase); return; }
         terminateProcessTree(child.pid, { signal: "SIGTERM" });
         killTimer = setTimeout(() => {
           if (!settled) terminateProcessTree(child.pid, { signal: "SIGKILL" });
@@ -405,6 +409,7 @@ function executeCodex(cwd, args, logFile) {
     });
 
     child.on("close", guarded((code, signal) => {
+      backendPhase(localchatPolicy, 'closed', child.pid);
       if (stdoutBuf.trim()) processLine(stdoutBuf); // flush a final unterminated line
       stdoutBuf = "";
       const rawOutput = readLastMessage(lastMessageFile);
@@ -483,6 +488,7 @@ async function runForeground(stateRoot, executionCwd, args) {
     rawOutput: result.rawOutput || "",
     ...(result.errorMessage ? { error: result.errorMessage } : {}),
   };
+  writeReceipt(localchatPolicy?.receiptBase, 'result', output);
   process.stdout.write(JSON.stringify(output) + "\n");
   if (result.status !== "completed") process.exitCode = 1;
 }
@@ -592,8 +598,9 @@ async function main() {
 
   const executionCwd = process.cwd();
   localchatPolicy = readLocalchatPolicy();
-  if (localchatPolicy && (localchatPolicy.target !== "codex" || args.resume || args.background || args.sandbox !== "read-only" || args.approval !== "never")) {
-    throw new Error("Localchat M0 requires a fresh read-only foreground Codex call");
+  backendPhase(localchatPolicy, 'not_started');
+  if (localchatPolicy && (localchatPolicy.target !== "codex" || (args.resume || null) !== (localchatPolicy.resumeSession || null) || args.background || args.sandbox !== "read-only" || args.approval !== "never")) {
+    throw new Error("Localchat requires a service-bound read-only foreground Codex call");
   }
   const { scopeRoot, workspaceRoot: stateRoot } = resolveScopedWorkspace(executionCwd);
   args.codexBinary = resolveActivatedCliBinary(scopeRoot, "codex");
